@@ -22,7 +22,7 @@ from config import settings
 from core.agent import Agente
 from core.planner import Planner
 from core.reflector import Reflector
-from core.router import ContextoRuteo, DecisionRouter, Router
+from core.router import ContextoRuteo, ModeloDestino, ModelRouter
 from interface.api import crear_app
 from interface.websocket import GestorWebSocket
 from memory.episodic import MemoriaEpisodica
@@ -51,9 +51,9 @@ async def construir_agente() -> AsyncIterator[tuple[Agente, AutenticadorLocal, G
     """Cablea todas las dependencias y las cierra al salir."""
     settings.asegurar_directorios()
 
-    router = Router()
-    modelo_planner = router.obtener_modelo(DecisionRouter.LOCAL)
-    modelo_reflector = router.obtener_modelo(DecisionRouter.LOCAL)
+    router = ModelRouter()
+    modelo_planner = router.obtener_cliente(ModeloDestino.LOCAL_DEFAULT)
+    modelo_reflector = router.obtener_cliente(ModeloDestino.LOCAL_DEFAULT)
 
     agente = Agente(
         router=router,
@@ -79,9 +79,13 @@ async def construir_agente() -> AsyncIterator[tuple[Agente, AutenticadorLocal, G
 
 async def calentar(agente: Agente) -> None:
     """Pequeña llamada de calentamiento para detectar errores temprano."""
-    contexto = ContextoRuteo(mensajes=[Mensaje(rol="system", contenido="ping")])
-    decision = agente._router.decidir(contexto)  # noqa: SLF001
-    log.info("Router operativo. Decisión inicial: %s", decision.value)
+    contexto = ContextoRuteo(mensajes=[Mensaje(rol="user", contenido="ping")])
+    seleccion = agente._router.route("ping", contexto)  # noqa: SLF001
+    log.info(
+        "Router operativo. Decisión inicial: %s (razón=%s)",
+        seleccion.model_name.value,
+        seleccion.razon,
+    )
 
 
 async def main() -> None:

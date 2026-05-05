@@ -58,7 +58,7 @@ class Planner:
             temperatura=0.2,
             max_tokens=2048,
         )
-        return self._parsear(respuesta.contenido)
+        return self._parsear(respuesta.content)
 
     @staticmethod
     def _parsear(json_texto: str) -> Plan:

@@ -25,27 +25,35 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # --- Ollama ---
-    ollama_host: str = Field(
-        default="http://localhost:11434",
-        description="URL base del servicio Ollama local.",
-    )
-    ollama_default_model: str = Field(default="llama3.2")
-    ollama_embed_model: str = Field(default="nomic-embed-text")
-
-    # --- Kimi (Moonshot) ---
+    # --- Kimi ---
     kimi_api_key: SecretStr = Field(default=SecretStr(""))
-    kimi_base_url: str = Field(default="https://api.moonshot.cn/v1")
-    kimi_default_model: str = Field(default="moonshot-v1-128k")
+    kimi_base_url: str = Field(default="https://api.moonshot.ai/v1")
+    kimi_model_default: str = Field(default="kimi-k2.6")
+    kimi_model_thinking: str = Field(default="kimi-k2-thinking")
 
     # --- DeepSeek ---
     deepseek_api_key: SecretStr = Field(default=SecretStr(""))
     deepseek_base_url: str = Field(default="https://api.deepseek.com/v1")
-    deepseek_default_model: str = Field(default="deepseek-chat")
+    deepseek_model_default: str = Field(default="deepseek-chat")
+    deepseek_model_reasoner: str = Field(default="deepseek-reasoner")
 
     # --- OpenRouter ---
     openrouter_api_key: SecretStr = Field(default=SecretStr(""))
     openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1")
+
+    # --- Ollama ---
+    ollama_base_url: str = Field(default="http://localhost:11434")
+    ollama_model_default: str = Field(default="gemma4:4b")
+    ollama_model_code: str = Field(default="qwen3-coder:8b")
+    ollama_model_reasoning: str = Field(default="qwen3:8b")
+    ollama_model_embed: str = Field(default="nomic-embed-text")
+    ollama_max_ram_gb: float = Field(default=5.0, gt=0)
+    ollama_timeout_s: int = Field(default=30, gt=0)
+
+    # --- Router ---
+    router_prefer_local: bool = Field(default=False)
+    router_log_decisions: bool = Field(default=True)
+    router_fallback_enabled: bool = Field(default=True)
 
     # --- Puertos ---
     api_port: int = Field(default=8080, ge=1, le=65535)
@@ -57,20 +65,14 @@ class Settings(BaseSettings):
     chromadb_path: Path = Field(default=Path("./data/chromadb"))
     vault_path: Path = Field(default=Path("./data/vault"))
     audit_log_path: Path = Field(default=Path("./data/audit.log"))
+    embed_cache_path: Path = Field(default=Path("./data/embeddings_cache.sqlite"))
 
     # --- Logging ---
     log_level: NivelLog = Field(default="INFO")
 
     # --- Seguridad ---
-    confirmacion_destructiva: bool = Field(
-        default=True,
-        description="Pedir confirmación antes de ejecutar acciones destructivas.",
-    )
-    max_acciones_autonomas: int = Field(
-        default=10,
-        ge=1,
-        description="Número máximo de acciones encadenadas sin intervención humana.",
-    )
+    confirmacion_destructiva: bool = Field(default=True)
+    max_acciones_autonomas: int = Field(default=10, ge=1)
     sandbox_enabled: bool = Field(default=True)
 
     # --- Identidad ---
@@ -81,7 +83,8 @@ class Settings(BaseSettings):
         """Crea los directorios de datos si no existen."""
         for ruta in (self.chromadb_path, self.vault_path):
             ruta.mkdir(parents=True, exist_ok=True)
-        self.audit_log_path.parent.mkdir(parents=True, exist_ok=True)
+        for archivo in (self.audit_log_path, self.embed_cache_path):
+            archivo.parent.mkdir(parents=True, exist_ok=True)
 
 
 settings = Settings()

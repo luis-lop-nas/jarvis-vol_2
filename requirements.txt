@@ -49,6 +49,7 @@ tenacity>=9.0.0
 orjson>=3.10.0
 pyyaml>=6.0.2
 watchdog>=6.0.0
+psutil>=6.0.0
 
 # --- Desarrollo / tests ---
 pytest>=8.3.0

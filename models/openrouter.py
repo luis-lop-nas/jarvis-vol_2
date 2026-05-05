@@ -1,13 +1,45 @@
-"""Cliente para OpenRouter (fallback genérico a múltiples proveedores)."""
+"""Cliente para OpenRouter — fallback gratuito vía catálogo `:free`.
+
+Se usa cuando Kimi/DeepSeek fallan o sus claves no están configuradas.
+Selecciona automáticamente un modelo del free tier disponible siguiendo el
+orden de preferencia definido en `MODELOS_FREE_PREFERIDOS`.
+"""
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any, AsyncIterator
 
-from openai import AsyncOpenAI
+import httpx
+import orjson
 
 from config import settings
-from models.base import BaseModel, Mensaje, RespuestaModelo
+from models._common import (
+    RetryPolicy,
+    TTLCache,
+    estimar_tokens,
+    mensaje_a_dict,
+)
+from models.base import (
+    BaseModel,
+    Mensaje,
+    ModelCapability,
+    ModelConfig,
+    ModelResponse,
+    StreamChunk,
+)
+
+log = logging.getLogger(__name__)
+
+# Slugs de OpenRouter por orden de preferencia. Todos `:free` salvo que cambie.
+MODELOS_FREE_PREFERIDOS: tuple[str, ...] = (
+    "moonshotai/kimi-k2:free",
+    "deepseek/deepseek-chat-v3:free",
+    "qwen/qwen3-coder:free",
+    "qwen/qwen3:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+)
 
 
 class OpenRouterModel(BaseModel):
@@ -15,16 +47,36 @@ class OpenRouterModel(BaseModel):
 
     nombre = "openrouter"
 
-    def __init__(self, modelo: str = "anthropic/claude-3.5-sonnet") -> None:
-        super().__init__(modelo)
-        self._cliente = AsyncOpenAI(
+    def __init__(
+        self,
+        modelo: str | None = None,
+        cliente: httpx.AsyncClient | None = None,
+        cache: TTLCache | None = None,
+    ) -> None:
+        config = ModelConfig(
+            name=modelo or MODELOS_FREE_PREFERIDOS[0],
             api_key=settings.openrouter_api_key.get_secret_value(),
             base_url=settings.openrouter_base_url,
-            default_headers={
+            timeout=120.0,
+            capabilities=ModelCapability.TEXT | ModelCapability.TOOL_USE,
+        )
+        super().__init__(config)
+        self._cliente = cliente or httpx.AsyncClient(
+            base_url=config.base_url,
+            headers={
+                "Authorization": f"Bearer {config.api_key}",
                 "HTTP-Referer": "https://github.com/luichi/jarvis",
                 "X-Title": "JARVIS",
             },
+            timeout=httpx.Timeout(connect=10, read=config.timeout, write=30, pool=10),
         )
+        self._retry = RetryPolicy(max_intentos=config.max_retries)
+        self._cache = cache or TTLCache(max_entradas=64, ttl_segundos=300)
+        self._modelos_free_disponibles: list[str] | None = None
+
+    # ------------------------------------------------------------------
+    # complete / stream
+    # ------------------------------------------------------------------
 
     async def complete(
         self,
@@ -35,26 +87,40 @@ class OpenRouterModel(BaseModel):
         max_tokens: int | None = None,
         herramientas: list[dict[str, Any]] | None = None,
         **kwargs: Any,
-    ) -> RespuestaModelo:
-        """Petición a OpenRouter; el `modelo` debe ser el slug del proveedor."""
-        respuesta = await self._cliente.chat.completions.create(
-            model=modelo or self.modelo_por_defecto,
-            messages=[{"role": m.rol, "content": m.contenido} for m in mensajes],
-            temperature=temperatura,
-            max_tokens=max_tokens,
-            tools=herramientas,
-            **kwargs,
-        )
-        eleccion = respuesta.choices[0]
-        return RespuestaModelo(
-            contenido=eleccion.message.content or "",
-            modelo=respuesta.model,
-            tokens_entrada=respuesta.usage.prompt_tokens if respuesta.usage else 0,
-            tokens_salida=respuesta.usage.completion_tokens if respuesta.usage else 0,
-            razon_finalizacion=eleccion.finish_reason,
-            llamadas_herramientas=[
-                t.model_dump() for t in (eleccion.message.tool_calls or [])
-            ],
+    ) -> ModelResponse:
+        modelo_id = modelo or await self._elegir_free()
+        cuerpo: dict[str, Any] = {
+            "model": modelo_id,
+            "messages": [mensaje_a_dict(m) for m in mensajes],
+            "temperature": temperatura,
+        }
+        if max_tokens is not None:
+            cuerpo["max_tokens"] = max_tokens
+        if herramientas:
+            cuerpo["tools"] = herramientas
+        cuerpo.update(kwargs)
+
+        inicio = time.monotonic()
+
+        async def _llamar() -> httpx.Response:
+            resp = await self._cliente.post("/chat/completions", json=cuerpo)
+            resp.raise_for_status()
+            return resp
+
+        respuesta = await self._retry.ejecutar(_llamar)
+        datos = respuesta.json()
+        duracion = int((time.monotonic() - inicio) * 1000)
+
+        eleccion = datos["choices"][0]
+        uso = datos.get("usage", {}) or {}
+        return ModelResponse(
+            content=eleccion["message"].get("content") or "",
+            model=datos.get("model", modelo_id),
+            tokens_input=uso.get("prompt_tokens", 0),
+            tokens_output=uso.get("completion_tokens", 0),
+            duration_ms=duracion,
+            finish_reason=eleccion.get("finish_reason"),
+            tool_calls=eleccion["message"].get("tool_calls") or [],
         )
 
     async def stream(
@@ -65,23 +131,76 @@ class OpenRouterModel(BaseModel):
         temperatura: float = 0.7,
         max_tokens: int | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[str]:
-        """Streaming de tokens vía OpenRouter."""
-        flujo = await self._cliente.chat.completions.create(
-            model=modelo or self.modelo_por_defecto,
-            messages=[{"role": m.rol, "content": m.contenido} for m in mensajes],
-            temperature=temperatura,
-            max_tokens=max_tokens,
-            stream=True,
-            **kwargs,
-        )
-        async for trozo in flujo:
-            delta = trozo.choices[0].delta.content
-            if delta:
-                yield delta
+    ) -> AsyncIterator[StreamChunk]:
+        modelo_id = modelo or await self._elegir_free()
+        cuerpo: dict[str, Any] = {
+            "model": modelo_id,
+            "messages": [mensaje_a_dict(m) for m in mensajes],
+            "temperature": temperatura,
+            "stream": True,
+        }
+        if max_tokens is not None:
+            cuerpo["max_tokens"] = max_tokens
+        cuerpo.update(kwargs)
 
-    async def embed(self, textos: list[str]) -> list[list[float]]:
-        raise NotImplementedError("Usar Ollama o un proveedor dedicado para embeddings.")
+        inicio = time.monotonic()
+        tokens_emitidos = 0
+
+        async with self._cliente.stream("POST", "/chat/completions", json=cuerpo) as resp:
+            resp.raise_for_status()
+            async for linea in resp.aiter_lines():
+                if not linea or not linea.startswith("data:"):
+                    continue
+                payload = linea[5:].strip()
+                if payload == "[DONE]":
+                    yield StreamChunk(content="", model=modelo_id, is_final=True)
+                    break
+                try:
+                    evento = orjson.loads(payload)
+                except orjson.JSONDecodeError:
+                    continue
+                delta = evento["choices"][0].get("delta", {}).get("content")
+                if delta:
+                    tokens_emitidos += estimar_tokens(delta)
+                    transcurrido = max(time.monotonic() - inicio, 1e-6)
+                    yield StreamChunk(
+                        content=delta,
+                        model=modelo_id,
+                        tokens_per_second=tokens_emitidos / transcurrido,
+                    )
+
+    # ------------------------------------------------------------------
+    # Misc
+    # ------------------------------------------------------------------
+
+    async def health_check(self) -> bool:
+        try:
+            resp = await self._cliente.get("/models", timeout=5.0)
+            return resp.status_code < 500
+        except (httpx.HTTPError, httpx.TransportError):
+            return False
 
     async def cerrar(self) -> None:
-        await self._cliente.close()
+        await self._cliente.aclose()
+
+    # ------------------------------------------------------------------
+    # Selector de modelo free
+    # ------------------------------------------------------------------
+
+    async def _elegir_free(self) -> str:
+        """Devuelve el primer modelo del catálogo `:free` que esté disponible."""
+        if self._modelos_free_disponibles is None:
+            try:
+                resp = await self._cliente.get("/models", timeout=5.0)
+                resp.raise_for_status()
+                ids = {m["id"] for m in resp.json().get("data", [])}
+                self._modelos_free_disponibles = [
+                    m for m in MODELOS_FREE_PREFERIDOS if m in ids
+                ]
+            except (httpx.HTTPError, httpx.TransportError) as exc:
+                log.warning("No se pudo listar modelos OpenRouter: %s", exc)
+                self._modelos_free_disponibles = list(MODELOS_FREE_PREFERIDOS)
+
+        if not self._modelos_free_disponibles:
+            return self.config.name
+        return self._modelos_free_disponibles[0]

@@ -48,7 +48,7 @@ class Reflector:
             ],
             temperatura=0.1,
         )
-        return self._parsear(respuesta.contenido)
+        return self._parsear(respuesta.content)
 
     @staticmethod
     def _parsear(texto: str) -> Reflexion:

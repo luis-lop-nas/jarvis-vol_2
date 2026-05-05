@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Read(//Users/luichi/Documents/jarvis-vol_2/**)",
+      "Edit(//Users/luichi/Documents/jarvis-vol_2/**)",
+      "Write(//Users/luichi/Documents/jarvis-vol_2/**)",
+      "Glob(//Users/luichi/Documents/jarvis-vol_2/**)",
+      "Grep(//Users/luichi/Documents/jarvis-vol_2/**)",
+
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(pip install:*)",
+      "Bash(pip show:*)",
+      "Bash(pip list:*)",
+      "Bash(pip freeze)",
+
+      "Bash(pytest:*)",
+      "Bash(ruff:*)",
+      "Bash(mypy:*)",
+
+      "Bash(ollama list)",
+      "Bash(ollama pull:*)",
+      "Bash(ollama show:*)",
+      "Bash(ollama run:*)",
+      "Bash(ollama serve)",
+
+      "Bash(make:*)",
+
+      "Bash(docker compose ps)",
+      "Bash(docker compose logs:*)",
+      "Bash(docker compose up -d)",
+      "Bash(docker compose down)",
+      "Bash(docker compose restart:*)",
+
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git checkout:*)",
+      "Bash(git restore:*)",
+
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(find:*)",
+      "Bash(tree:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(file:*)",
+      "Bash(stat:*)",
+      "Bash(env)",
+      "Bash(which:*)",
+      "Bash(echo:*)",
+      "Bash(pwd)",
+      "Bash(mkdir:*)",
+      "Bash(touch:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+
+      "Bash(playwright install:*)",
+      "Bash(curl http://localhost:*)",
+      "Bash(curl http://127.0.0.1:*)"
+    ],
+    "ask": [
+      "Bash(rm:*)",
+      "Bash(rm -rf:*)",
+      "Bash(sudo:*)",
+      "Bash(git push:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean:*)",
+      "Bash(docker compose down -v)",
+      "Bash(docker rm:*)",
+      "Bash(docker volume rm:*)",
+      "Bash(pip uninstall:*)",
+      "Bash(curl http*://api.*)",
+      "Bash(curl http*://*.com*)",
+      "Bash(curl http*://*.ai*)",
+      "Bash(open:*)",
+      "Bash(osascript:*)"
+    ],
+    "deny": [
+      "Read(//Users/luichi/Documents/jarvis-vol_2/.env)",
+      "Read(//Users/luichi/Documents/jarvis-vol_2/data/**)",
+      "Read(**/.aws/credentials)",
+      "Read(**/.ssh/id_*)",
+      "Read(**/Library/Keychains/**)",
+      "Bash(curl * .env*)",
+      "Bash(cat .env)",
+      "Bash(*KIMI_API_KEY*)",
+      "Bash(*DEEPSEEK_API_KEY*)",
+      "Bash(*OPENROUTER_API_KEY*)",
+      "Bash(eval:*)",
+      "Bash(:(){ :|:& };:)"
+    ],
+    "additionalDirectories": [
+      "/Users/luichi/Documents/jarvis-vol_2"
+    ]
+  },
+  "env": {
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTHONUNBUFFERED": "1"
+  },
+  "outputStyle": "default",
+  "includeCoAuthoredBy": true
+}

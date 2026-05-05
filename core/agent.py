@@ -77,13 +77,15 @@ class Agente:
         """Versión streaming: emite tokens conforme se generan."""
         self._estado.historial.append(Mensaje(rol="user", contenido=peticion))
         contexto = ContextoRuteo(mensajes=self._estado.historial)
-        decision = self._router.decidir(contexto)
-        modelo = self._router.obtener_modelo(decision)
+        seleccion = self._router.route(peticion, contexto)
+        modelo = self._router.obtener_cliente(seleccion.model_name)
 
         buffer: list[str] = []
-        async for trozo in modelo.stream(self._estado.historial):
-            buffer.append(trozo)
-            yield trozo
+        async for chunk in modelo.stream(self._estado.historial):
+            if chunk.is_final or not chunk.content:
+                continue
+            buffer.append(chunk.content)
+            yield chunk.content
 
         self._estado.historial.append(Mensaje(rol="assistant", contenido="".join(buffer)))
 
