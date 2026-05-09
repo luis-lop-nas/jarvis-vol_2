@@ -1,5 +1,9 @@
 # JARVIS — Claude Code configuration
 
+## Session start
+**Read `PROGRESS.md` first** — it tracks what's done, what's in progress, and what's next.
+Update it at the end of each session.
+
 ## Model strategy
 - Use **claude-opus-4** for: architecture decisions, complex problem solving, planning new modules, reviewing security-critical code
 - Use **claude-sonnet-4** for: implementing functions, writing tests, refactoring, documentation, repetitive tasks

@@ -95,8 +95,7 @@
       "Bash(*KIMI_API_KEY*)",
       "Bash(*DEEPSEEK_API_KEY*)",
       "Bash(*OPENROUTER_API_KEY*)",
-      "Bash(eval:*)",
-      "Bash(:(){ :|:& };:)"
+      "Bash(eval:*)"
     ],
     "additionalDirectories": [
       "/Users/luichi/Documents/jarvis-vol_2"

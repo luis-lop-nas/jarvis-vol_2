@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "mcp-builder": {
+      "source": "ComposioHQ/awesome-claude-skills",
+      "sourceType": "github",
+      "skillPath": "mcp-builder/SKILL.md",
+      "computedHash": "796e369a513fe27a0eb5461611dec6bf943da7992194ddec1291f4fa34fb28cb"
+    }
+  }
+}
