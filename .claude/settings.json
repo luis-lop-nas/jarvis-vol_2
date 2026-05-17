@@ -25,6 +25,7 @@
       "Bash(ollama run:*)",
       "Bash(ollama serve)",
 
+      "Bash(node:*)",
       "Bash(make:*)",
 
       "Bash(docker compose ps)",
@@ -65,7 +66,18 @@
 
       "Bash(playwright install:*)",
       "Bash(curl http://localhost:*)",
-      "Bash(curl http://127.0.0.1:*)"
+      "Bash(curl http://127.0.0.1:*)",
+      "Bash(curl -s \"https://api.github.com/*\")",
+
+      "Bash(claude --version)",
+      "Bash(claude plugin list *)",
+      "Bash(claude plugin details *)",
+
+      "WebSearch",
+      "WebFetch",
+
+      "mcp__claude_ai_Notion__notion-fetch",
+      "mcp__claude_ai_Notion__notion-search"
     ],
     "ask": [
       "Bash(rm:*)",

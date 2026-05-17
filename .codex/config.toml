@@ -1,0 +1,5 @@
+# Configuración de Codex para JARVIS
+# Usada por el plugin codex de Claude Code
+
+model = "codex-mini-latest"
+model_reasoning_effort = "high"
