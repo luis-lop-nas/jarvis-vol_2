@@ -6,12 +6,10 @@ periféricos del equipo. Deben pasar en CI sin macOS.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -75,8 +73,9 @@ class TestFilesystem:
         """PDFs con palabras de física van a universidad."""
         from actions.filesystem import SistemaArchivos
         fs = SistemaArchivos(raiz_permitida=tmp_path)
-        from actions.filesystem import InfoArchivo
         from datetime import datetime
+
+        from actions.filesystem import InfoArchivo
         info = InfoArchivo(
             ruta=tmp_path / "mecanica_cuantica.pdf",
             nombre="mecanica_cuantica.pdf",
@@ -94,8 +93,9 @@ class TestFilesystem:
     @pytest.mark.asyncio
     async def test_classify_pdf_factura(self, tmp_path: Path) -> None:
         """PDFs con palabras de factura van a admin."""
-        from actions.filesystem import InfoArchivo, SistemaArchivos
         from datetime import datetime
+
+        from actions.filesystem import InfoArchivo, SistemaArchivos
         fs = SistemaArchivos(raiz_permitida=tmp_path)
         info = InfoArchivo(
             ruta=tmp_path / "factura_enero.pdf",
@@ -113,8 +113,9 @@ class TestFilesystem:
     @pytest.mark.asyncio
     async def test_classify_screenshot(self, tmp_path: Path) -> None:
         """PNGs con 'screenshot' en el nombre van a screenshots."""
-        from actions.filesystem import InfoArchivo, SistemaArchivos
         from datetime import datetime
+
+        from actions.filesystem import InfoArchivo, SistemaArchivos
         fs = SistemaArchivos(raiz_permitida=tmp_path)
         info = InfoArchivo(
             ruta=tmp_path / "Screenshot 2025-01-01.png",
@@ -254,7 +255,6 @@ class TestTerminal:
     @pytest.mark.asyncio
     async def test_secrets_no_pasan_a_subproceso(self, tmp_path: Path, monkeypatch) -> None:
         """Variables de API no se pasan al entorno del subproceso."""
-        import os
         monkeypatch.setenv("KIMI_API_KEY", "secret-key-12345")
         t = self._make_terminal(tmp_path, sandbox=False)
         env = t._construir_env()
@@ -373,14 +373,15 @@ class TestRatonTeclado:
     async def test_rate_limit_max_acciones_por_segundo(self) -> None:
         """Más de 10 acciones/segundo → el sistema hace pause automática."""
         import time
-        from actions.keyboard_mouse import RatonTeclado, _MAX_ACCIONES_POR_SEGUNDO
+
+        from actions.keyboard_mouse import _MAX_ACCIONES_POR_SEGUNDO
         rt = self._make_rt()
         rt._pyag.moveTo = MagicMock()
 
         with patch.object(rt, "_verificar_coordenadas", new=AsyncMock(return_value=True)):
             inicio = time.monotonic()
             # Ejecutar 11 acciones seguidas
-            for i in range(_MAX_ACCIONES_POR_SEGUNDO + 1):
+            for _ in range(_MAX_ACCIONES_POR_SEGUNDO + 1):
                 rt._acciones_en_segundo = [time.monotonic()] * _MAX_ACCIONES_POR_SEGUNDO
                 await rt._limitar_tasa()
             duracion = time.monotonic() - inicio

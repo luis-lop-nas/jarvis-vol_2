@@ -14,15 +14,15 @@ import shlex
 import time
 from asyncio import subprocess as aio_sub
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    from security.auth import AuthManager
     from security.audit_log import AuditLog
+    from security.auth import AuthManager
     from security.confirmation import ConfirmationManager
 
 log = __import__("logging").getLogger(__name__)
@@ -226,7 +226,7 @@ class Sandbox:
             # SandboxError si bloqueado o denegado
         """
         analysis = self.check_command(command)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         if analysis.risk_level == CommandRisk.BLOCKED:
             raise SandboxError(command, analysis.reason, CommandRisk.BLOCKED, now)
@@ -303,7 +303,7 @@ class Sandbox:
                 str(path),
                 "Ruta fuera de HOME",
                 CommandRisk.BLOCKED,
-                datetime.now(timezone.utc),
+                datetime.now(UTC),
             ) from exc
         return p
 
@@ -348,10 +348,10 @@ class Sandbox:
 
         try:
             stdout_b, stderr_b = await asyncio.wait_for(proceso.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proceso.kill()
             await proceso.wait()
-            raise TimeoutError(f"Comando superó {timeout}s: {argv[0]}")
+            raise TimeoutError(f"Comando superó {timeout}s: {argv[0]}") from None
 
         duracion_ms = (time.monotonic() - inicio) * 1000
         result = CommandResult(

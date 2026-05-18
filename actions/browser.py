@@ -8,10 +8,11 @@ Dos capas:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import Any, AsyncGenerator, Callable, Self
+from typing import Any, Self
 
 from actions.system import ControlSistema
 
@@ -228,7 +229,7 @@ class Navegador:
         *,
         headless: bool = True,
         callback_confirmacion: CallbackConfirmacion | None = None,
-        audit_log: "AuditLog | None" = None,
+        audit_log: AuditLog | None = None,
     ) -> None:
         self._headless = headless
         self._confirmar = callback_confirmacion or _denegar

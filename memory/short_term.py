@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -25,7 +25,7 @@ class Message(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex)
     role: Literal["user", "assistant", "system", "tool"]
     content: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     tokens_estimate: int = Field(default=0, ge=0)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -119,7 +119,13 @@ class ShortTermMemory:
     async def to_langchain_messages(self) -> list[object]:
         """Convierte los mensajes a objetos `langchain.schema.BaseMessage`."""
         try:
-            from langchain.schema import BaseMessage, HumanMessage, AIMessage, SystemMessage, ChatMessage
+            from langchain.schema import (
+                AIMessage,
+                BaseMessage,
+                ChatMessage,
+                HumanMessage,
+                SystemMessage,
+            )
         except ImportError as exc:
             raise ImportError(
                 "LangChain no está instalado. Instala langchain para usar esta función."

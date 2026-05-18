@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 import psutil
 
-from perception.accessibility import AppInfo, Bounds, WindowInfo
+from perception.accessibility import AppInfo, WindowInfo
 
 
 # ── Snapshot ──────────────────────────────────────────────────────────────────
@@ -248,9 +248,7 @@ def _estado_cambio_relevante(anterior: SystemState, actual: SystemState) -> bool
         return True
     if not anterior.is_busy() and actual.is_busy():
         return True
-    if anterior.wifi_connected != actual.wifi_connected:
-        return True
-    return False
+    return anterior.wifi_connected != actual.wifi_connected
 
 
 async def watch_state(

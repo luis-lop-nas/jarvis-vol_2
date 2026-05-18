@@ -8,8 +8,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
@@ -30,9 +31,9 @@ class ConfirmationRequest(BaseModel):
     command: str | None = None
     risk_level: str  # "moderate" | "dangerous"
     requires_auth: bool
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     expires_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc) + timedelta(seconds=60)
+        default_factory=lambda: datetime.now(UTC) + timedelta(seconds=60)
     )
 
 
@@ -41,7 +42,7 @@ class ConfirmationResult(BaseModel):
 
     request_id: str
     confirmed: bool
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     authenticated: bool = False
 
 
@@ -109,7 +110,7 @@ class ConfirmationManager:
             result = await cm.request_confirmation("Eliminar brief.pdf", risk_level="dangerous")
         """
         req_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         request = ConfirmationRequest(
             id=req_id,
             action_description=action_description,
@@ -142,7 +143,7 @@ class ConfirmationManager:
 
         try:
             await asyncio.wait_for(event.wait(), timeout=_CONFIRMATION_TIMEOUT)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._pending.pop(req_id, None)
             log.warning("Confirmación %s expiró por timeout", req_id)
             return ConfirmationResult(request_id=req_id, confirmed=False)
@@ -180,7 +181,7 @@ class ConfirmationManager:
             return
         req, event, result_box = entry
         # Verificar que la solicitud no haya expirado
-        if datetime.now(timezone.utc) > req.expires_at:
+        if datetime.now(UTC) > req.expires_at:
             log.warning("resolve() para request_id expirado: %s", request_id)
             return
         # Solo resolver la primera vez (idempotente)

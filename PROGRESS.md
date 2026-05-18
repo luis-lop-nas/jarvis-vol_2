@@ -152,21 +152,46 @@
 
 ---
 
-## 🔄 En progreso
+## ✅ Completado recientemente
 
-_(nada activo — debug completo del sistema 2026-05-18)_
+### Fase 10 — Tests e2e + Benchmarks (2026-05-18)
+- **`tests/e2e/test_full_system.py`** — 12 tests end-to-end completos:
+  - `test_e2e_simple_file_read`: lectura de archivo real con herramienta inyectada
+  - `test_e2e_file_organize`: plan con confirmación → agente pausa en `esperando`
+  - `test_e2e_terminal_safe_command`: sandbox permite `python3 --version` (returncode 0)
+  - `test_e2e_terminal_blocked_command`: sandbox bloquea `rm -rf /` con `SandboxError(BLOCKED)`
+  - `test_e2e_memory_persistence`: `store_interaction` llamado ≥2 veces por ciclo
+  - `test_e2e_router_privacy`: texto con "contraseña" → `ModeloDestino.LOCAL_DEFAULT`, razón `datos_sensibles`
+  - `test_e2e_agent_max_steps`: agente para a MAX_PASOS=3, emite `tipo=error` con "Límite"
+  - `test_e2e_agent_streaming`: agente emite `pensando → actuando → listo` con progreso monotónico
+  - `test_e2e_websocket_protocol`: WebSocket responde ping→pong, cierra con 1008 ante session_id inválido
+  - `test_e2e_confirmation_flow`: agente pausa en `esperando`, `resume('si')` desbloquea y completa
+  - `test_e2e_full_conversation`: 5 turnos consecutivos, `store_interaction` ≥10 llamadas
+  - `test_e2e_confirmation_via_http`: POST /confirm desbloquea agente vía HTTP API
+- **`tests/e2e/test_performance.py`** — 6 benchmarks de rendimiento:
+  - `test_perf_router_decision`: 100 decisiones < 50ms media, P99 < 150ms
+  - `test_perf_screenshot_encode`: encode imagen 1080p < 200ms media
+  - `test_perf_embedding_overhead`: overhead EmbeddingsClient (sin red) < 50ms
+  - `test_perf_short_term_memory`: add_message < 5ms, get_context_window < 10ms
+  - `test_perf_memory_usage`: imports del sistema < 100MB RAM adicional
+  - `test_perf_sandbox_analysis`: check_command media < 1ms, P98 < 5ms
+- **`pyproject.toml`** — registrados markers `e2e` y `perf` (`--strict-markers`)
+- **Suite completa: 248/248 verde en 18.63s**
 
 ---
 
-## ⏳ Siguiente a implementar (Fase 10)
+## 🔄 En progreso
 
-Candidatos para Fase 10:
+_(nada activo — Fase 10 completada 2026-05-18)_
 
-1. **Tests e2e runtime** — `tests/test_runtime.py`: arranque completo del agente, tarea filesystem MCP, confirmación aprobada/denegada, cancelación, auditoría real.
-2. **Persistencia de sesiones** — guardar/restaurar sesiones activas en disco para sobrevivir reinicios del servidor.
-3. **Distribución del overlay** — `interface/swiftui/build.sh` ya preparado. Firma y notarización. Auto-update system.
-4. **Dashboard web** — panel `http://localhost:8765` con historial de sesiones, logs y estado del sistema.
-5. **Scoping de confirmaciones por sesión** — vincular `confirmation_manager.resolve()` a `session_id` para evitar que una sesión apruebe confirmaciones de otra (hallazgo crítico del auditor pendiente de resolver completamente).
+---
+
+## ⏳ Siguientes candidatos
+
+1. **Persistencia de sesiones** — guardar/restaurar sesiones activas en disco para sobrevivir reinicios del servidor.
+2. **Distribución del overlay** — `interface/swiftui/build.sh` ya preparado. Firma y notarización. Auto-update system.
+3. **Dashboard web** — panel `http://localhost:8765` con historial de sesiones, logs y estado del sistema.
+4. **Scoping de confirmaciones por sesión** — vincular `confirmation_manager.resolve()` a `session_id` para evitar que una sesión apruebe confirmaciones de otra (hallazgo crítico del auditor pendiente).
 
 ---
 

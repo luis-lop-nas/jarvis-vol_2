@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from actions.terminal import Terminal
 from mcp_servers.base import MCPTool, campo, schema_objeto, serializar_dato

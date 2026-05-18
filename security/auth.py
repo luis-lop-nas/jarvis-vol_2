@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
@@ -25,7 +25,7 @@ class AuthResult(BaseModel):
 
     success: bool
     method: str  # "face_id" | "touch_id" | "password" | "failed"
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     reason: str | None = None
     error: str | None = None
 
@@ -44,7 +44,7 @@ class AuthError(Exception):
         super().__init__(message)
         self.message = message
         self.reason = reason
-        self.timestamp = datetime.now(timezone.utc)
+        self.timestamp = datetime.now(UTC)
 
 
 class AuthManager:
@@ -61,7 +61,7 @@ class AuthManager:
         self._last_auth: AuthResult | None = None
         self._lock = asyncio.Lock()
         # Single-flight: evita abrir dos diálogos Face ID en paralelo
-        self._in_flight: "asyncio.Future[AuthResult] | None" = None
+        self._in_flight: asyncio.Future[AuthResult] | None = None
 
     async def authenticate(self, reason: str) -> AuthResult:
         """Muestra el diálogo nativo de Face ID con el motivo dado.
@@ -74,7 +74,7 @@ class AuthManager:
         async with self._lock:
             # 1. Comprobar caché
             if self._last_auth and self._last_auth.success:
-                elapsed = (datetime.now(timezone.utc) - self._last_auth.timestamp).total_seconds()
+                elapsed = (datetime.now(UTC) - self._last_auth.timestamp).total_seconds()
                 if elapsed < _AUTH_CACHE_SECONDS:
                     return self._last_auth
 

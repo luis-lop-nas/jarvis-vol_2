@@ -5,8 +5,8 @@ from interface.api_models import (
     AgentUpdate,
     ChatRequest,
     ChatResponse,
-    ConfirmRequest,
     ConfirmationRequest,
+    ConfirmRequest,
     SystemStatus,
 )
 from interface.websocket import ConnectionManager

@@ -17,8 +17,20 @@ from perception.accessibility import (
     wait_for_element,
 )
 from perception.ocr import extract_structured, extract_text, extract_text_local, extract_text_vision
-from perception.screenshot import capture_region, capture_screen, capture_to_file, capture_window, encode_for_vision
-from perception.system_state import SystemState, context_summary, get_system_state, is_busy, watch_state
+from perception.screenshot import (
+    capture_region,
+    capture_screen,
+    capture_to_file,
+    capture_window,
+    encode_for_vision,
+)
+from perception.system_state import (
+    SystemState,
+    context_summary,
+    get_system_state,
+    is_busy,
+    watch_state,
+)
 
 __all__ = [
     # screenshot

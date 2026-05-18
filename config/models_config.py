@@ -8,10 +8,10 @@ el router, qué proveedor los sirve y qué características tiene cada uno
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class Proveedor(str, Enum):
+class Proveedor(StrEnum):
     """Proveedores soportados por JARVIS."""
 
     OLLAMA = "ollama"
@@ -20,7 +20,7 @@ class Proveedor(str, Enum):
     OPENROUTER = "openrouter"
 
 
-class Capacidad(str, Enum):
+class Capacidad(StrEnum):
     """Capacidades que puede tener un modelo."""
 
     TEXTO = "texto"

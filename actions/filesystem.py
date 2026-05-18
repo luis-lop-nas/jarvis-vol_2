@@ -11,10 +11,10 @@ import mimetypes
 import re
 import shutil
 from asyncio import Task
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import AsyncGenerator, Awaitable, Callable
 
 _HOME = Path.home()
 
@@ -113,9 +113,9 @@ class SistemaArchivos:
         self,
         raiz_permitida: Path | None = None,
         *,
-        callback_confirmacion: Callable[[str], "asyncio.Future[bool]"] | None = None,
-        audit_log: "AuditLog | None" = None,
-        auth_manager: "AuthManager | None" = None,
+        callback_confirmacion: Callable[[str], asyncio.Future[bool]] | None = None,
+        audit_log: AuditLog | None = None,
+        auth_manager: AuthManager | None = None,
     ) -> None:
         self._raiz = (raiz_permitida or _HOME).resolve()
         self._confirmar = callback_confirmacion or _denegar
@@ -410,7 +410,7 @@ class SistemaArchivos:
             razon=f"Clasificado como '{categoria}' → {destino_dir}",
         )
 
-    async def vigilar_downloads(self) -> "Task[None]":
+    async def vigilar_downloads(self) -> Task[None]:
         """Inicia una tarea asyncio que monitoriza ~/Downloads y clasifica archivos nuevos.
 
         Devuelve la Task para poder cancelarla.
@@ -486,8 +486,8 @@ class SistemaArchivos:
             nombre=ruta.name,
             extension=ruta.suffix,
             tamaño_bytes=stat.st_size,
-            creado_en=datetime.fromtimestamp(stat.st_birthtime if hasattr(stat, "st_birthtime") else stat.st_ctime, tz=timezone.utc),
-            modificado_en=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+            creado_en=datetime.fromtimestamp(stat.st_birthtime if hasattr(stat, "st_birthtime") else stat.st_ctime, tz=UTC),
+            modificado_en=datetime.fromtimestamp(stat.st_mtime, tz=UTC),
             es_directorio=ruta.is_dir(),
             es_oculto=ruta.name.startswith("."),
             mime_type=mime or "application/octet-stream",

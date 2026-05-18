@@ -15,7 +15,8 @@ import asyncio
 import logging
 import shutil
 import time
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 import orjson

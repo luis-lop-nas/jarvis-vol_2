@@ -6,12 +6,11 @@ import pytest
 
 from core.router import (
     ContextoRuteo,
+    ModeloDestino,
     ModelRouter,
     ModelSelection,
-    ModeloDestino,
 )
 from models.base import Mensaje
-
 
 # ---------------------------------------------------------------------------
 # 1. Datos sensibles → siempre LOCAL

@@ -6,21 +6,16 @@ Mockea LocalAuthentication, subprocess y filesystem completamente.
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
-import threading
-from datetime import date, datetime, timezone
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from security.audit_log import AuditEntry, AuditLog
-from security.auth import AuthError, AuthManager, AuthResult
-from security.confirmation import ConfirmationError, ConfirmationManager, ConfirmationRequest
-from security.permissions import Permission, PermissionsManager, PermissionStatus
-from security.sandbox import CommandRisk, Sandbox, SandboxError, SandboxResult
-
+from security.audit_log import AuditLog
+from security.auth import AuthError, AuthManager
+from security.confirmation import ConfirmationError, ConfirmationManager
+from security.permissions import Permission, PermissionsManager
+from security.sandbox import CommandRisk, Sandbox, SandboxError
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -523,9 +518,8 @@ class TestConfirmationManager:
     async def test_require_confirmation_for_raises(self):
         """require_confirmation_for() lanza ConfirmationError si no confirmado."""
         cm = ConfirmationManager()
-        with patch("security.confirmation._CONFIRMATION_TIMEOUT", 0.05):
-            with pytest.raises(ConfirmationError):
-                await cm.require_confirmation_for("Borrar ~/.config")
+        with patch("security.confirmation._CONFIRMATION_TIMEOUT", 0.05), pytest.raises(ConfirmationError):
+            await cm.require_confirmation_for("Borrar ~/.config")
 
     def test_resolve_unknown_id_logs_warning(self, caplog):
         """resolve() con ID desconocido no lanza excepción."""
@@ -542,7 +536,6 @@ class TestAuditLog:
     @pytest.mark.asyncio
     async def test_audit_log_write(self, tmp_path):
         """Entrada escrita correctamente en JSONL."""
-        import orjson
 
         audit = AuditLog(base_dir=tmp_path)
         await audit.start()
@@ -733,10 +726,8 @@ class TestPermissionsManager:
         def mock_check(perm: Permission) -> bool:
             return perm != Permission.ACCESSIBILITY  # accesibilidad falta
 
-        with patch.object(pm, "_check_granted", side_effect=mock_check):
-            with patch("subprocess.Popen"):  # evita abrir System Settings
-                with pytest.raises(SystemExit) as exc_info:
-                    pm.verify_critical()
+        with patch.object(pm, "_check_granted", side_effect=mock_check), patch("subprocess.Popen"), pytest.raises(SystemExit) as exc_info:
+            pm.verify_critical()
 
         assert exc_info.value.code == 1
 

@@ -158,7 +158,7 @@ class MCPBus:
             )
             await self._audit_result(result)
             return result
-        except asyncio.TimeoutError:
+        except TimeoutError:
             duracion = int((time.monotonic() - inicio) * 1000)
             result = MCPResult(
                 success=False,

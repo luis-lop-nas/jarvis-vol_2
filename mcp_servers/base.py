@@ -187,10 +187,7 @@ def validar_parametros(params: dict[str, Any], schema: dict[str, Any]) -> list[s
         if not isinstance(definicion, dict) or "type" not in definicion:
             continue
         esperado = definicion["type"]
-        if isinstance(esperado, list):
-            tipos = [str(t) for t in esperado]
-        else:
-            tipos = [str(esperado)]
+        tipos = [str(t) for t in esperado] if isinstance(esperado, list) else [str(esperado)]
         if not _tipo_valido(valor, tipos):
             errores.append(
                 f"parámetro '{nombre}' debe ser {', '.join(tipos)} "

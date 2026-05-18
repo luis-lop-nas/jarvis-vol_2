@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import chromadb
@@ -33,8 +33,8 @@ class MemoryEntry(BaseModel):
     category: str
     source: str
     importance: float = Field(default=0.0, ge=0.0, le=1.0)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    last_accessed: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    last_accessed: datetime = Field(default_factory=lambda: datetime.now(UTC))
     access_count: int = Field(default=0, ge=0)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -69,7 +69,7 @@ class LongTermMemory:
         coleccion = self._collection()
         if not entry.summary:
             entry.summary = entry.content[:256]
-        entry.last_accessed = datetime.now(timezone.utc)
+        entry.last_accessed = datetime.now(UTC)
         vector = await self._embeddings.embed_text(entry.content)
 
         await asyncio.to_thread(
@@ -128,7 +128,7 @@ class LongTermMemory:
         entrada = self._parse_get_result(resultado)
         if entrada:
             entrada.access_count += 1
-            entrada.last_accessed = datetime.now(timezone.utc)
+            entrada.last_accessed = datetime.now(UTC)
             await self._update_entry_metadata(entrada)
             log.info("Memoria recuperada: %s", ident)
         return entrada
@@ -141,7 +141,7 @@ class LongTermMemory:
         coleccion = self._collection()
         actual.content = content
         actual.summary = content[:256]
-        actual.last_accessed = datetime.now(timezone.utc)
+        actual.last_accessed = datetime.now(UTC)
         vector = await self._embeddings.embed_text(content)
 
         await asyncio.to_thread(
@@ -393,7 +393,7 @@ class LongTermMemory:
                 return datetime.fromisoformat(value)
             except ValueError:
                 pass
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
 
 MemoriaLargoPlazo = LongTermMemory

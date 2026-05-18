@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Awaitable, Callable
+from typing import TYPE_CHECKING
 
 from mcp_servers.base import MCPRequest, MCPResult, MCPTool
 from mcp_servers.server_code import ServidorCodigo
@@ -38,7 +39,7 @@ def crear_bus_mcp(
     raiz_filesystem: Path | None = None,
     callback_confirmacion: Callable[[str], Awaitable[bool]] | None = None,
     audit_log: AuditLog | None = None,
-) -> "MCPBus":
+) -> MCPBus:
     """Crea el bus MCP interno con servidores seguros por defecto.
 
     Args:

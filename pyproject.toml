@@ -3,6 +3,10 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-ra --strict-markers"
+markers = [
+    "e2e: tests end-to-end del sistema completo (pytest -m e2e)",
+    "perf: benchmarks de rendimiento (pytest -m perf)",
+]
 filterwarnings = [
     "ignore::DeprecationWarning:pkg_resources.*",
 ]

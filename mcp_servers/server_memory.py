@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from mcp_servers.base import MCPTool, campo, schema_objeto, serializar_dato
 from memory import MemoryEntry, MemorySystem
 from memory.episodic import Episode
-from mcp_servers.base import MCPTool, campo, schema_objeto, serializar_dato
 
 
 class ServidorMemoria:

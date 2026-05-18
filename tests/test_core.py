@@ -13,7 +13,6 @@ import pytest
 from core.planner import PasoAccion, PlanEjecucion, Planner, _tiene_ciclo
 from core.reflector import DecisionReflexion, Reflector, ResultadoPaso
 
-
 # ---------------------------------------------------------------------------
 # Helpers de fixtures
 # ---------------------------------------------------------------------------
@@ -287,7 +286,6 @@ class TestAgente:
     @pytest.mark.asyncio
     async def test_agent_streaming(self) -> None:
         """run() emite ActualizacionAgente con distintos tipos progresivamente."""
-        from models.base import ModelResponse
 
         agente = _make_agente()
         # Mockear reflector para que devuelva CONTINUAR (no REINTENTAR que loop)
@@ -358,8 +356,8 @@ class TestAgente:
         from models.base import ModelResponse
         modelo = MagicMock()
         modelo.complete = AsyncMock(return_value=ModelResponse(content=json_plan, model="mock"))
-        from memory.short_term import MemoriaCortoPlazo
         from core.agent import Agente
+        from memory.short_term import MemoriaCortoPlazo
 
         agente = Agente(
             planner=Planner(modelo),
@@ -399,8 +397,8 @@ class TestAgente:
         from models.base import ModelResponse
         modelo = MagicMock()
         modelo.complete = AsyncMock(return_value=ModelResponse(content=json_plan, model="mock"))
-        from memory.short_term import MemoriaCortoPlazo
         from core.agent import Agente
+        from memory.short_term import MemoriaCortoPlazo
 
         herramienta_mock = AsyncMock(return_value=True)
         agente = Agente(

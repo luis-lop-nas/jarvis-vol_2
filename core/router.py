@@ -19,9 +19,10 @@ import logging
 import re
 import socket
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Iterable
+from enum import StrEnum
+from typing import Any
 
 from config import settings
 from models.base import BaseModel, Mensaje
@@ -78,7 +79,7 @@ PATRON_RUTA_SECRETO = re.compile(r"\.env|\.ssh/|/\.aws/|Keychain", re.IGNORECASE
 # ---------------------------------------------------------------------------
 
 
-class ModeloDestino(str, Enum):
+class ModeloDestino(StrEnum):
     """Identificadores lógicos de destinos de enrutado."""
 
     LOCAL_DEFAULT = "local_default"

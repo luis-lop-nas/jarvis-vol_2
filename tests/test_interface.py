@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from collections import deque
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -14,10 +13,14 @@ import pytest
 from starlette.testclient import TestClient
 
 from core.agent import ActualizacionAgente
-from interface.api import crear_servidor, _session_queues, _session_history, _session_tasks, _rate_state
-from interface.api_models import AgentUpdate
+from interface.api import (
+    _rate_state,
+    _session_history,
+    _session_queues,
+    _session_tasks,
+    crear_servidor,
+)
 from interface.websocket import ConnectionManager
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -319,19 +322,17 @@ async def test_rate_limit_429_al_superar_10_por_segundo(manager):
 
 
 def test_websocket_ping_pong(app):
-    with TestClient(app) as tc:
-        with tc.websocket_connect("/ws?session_id=ws-ping") as ws:
-            ws.send_text(orjson.dumps({"type": "ping"}).decode())
-            data = orjson.loads(ws.receive_text())
-            assert data["type"] == "pong"
+    with TestClient(app) as tc, tc.websocket_connect("/ws?session_id=ws-ping") as ws:
+        ws.send_text(orjson.dumps({"type": "ping"}).decode())
+        data = orjson.loads(ws.receive_text())
+        assert data["type"] == "pong"
 
 
 def test_websocket_json_invalido_devuelve_error(app):
-    with TestClient(app) as tc:
-        with tc.websocket_connect("/ws?session_id=ws-json") as ws:
-            ws.send_text("esto no es json{{{")
-            data = orjson.loads(ws.receive_text())
-            assert data["type"] == "error"
+    with TestClient(app) as tc, tc.websocket_connect("/ws?session_id=ws-json") as ws:
+        ws.send_text("esto no es json{{{")
+        data = orjson.loads(ws.receive_text())
+        assert data["type"] == "error"
 
 
 def test_websocket_reconexion_recibe_buffer(manager):
@@ -343,7 +344,6 @@ def test_websocket_reconexion_recibe_buffer(manager):
     agente = make_agente()
     app2 = crear_servidor(agente, manager)
 
-    with TestClient(app2) as tc:
-        with tc.websocket_connect("/ws?session_id=buf-sid") as ws:
-            data = orjson.loads(ws.receive_text())
-            assert data["message"] == "Completado."
+    with TestClient(app2) as tc, tc.websocket_connect("/ws?session_id=buf-sid") as ws:
+        data = orjson.loads(ws.receive_text())
+        assert data["message"] == "Completado."

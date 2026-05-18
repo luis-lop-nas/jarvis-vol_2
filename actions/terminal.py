@@ -12,9 +12,9 @@ import shlex
 import sys
 import time
 from asyncio import subprocess as aio_sub
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncGenerator, Callable
 
 _HOME = Path.home()
 _MAX_TIMEOUT = 120.0
@@ -104,9 +104,9 @@ class Terminal:
         directorio_trabajo: Path | None = None,
         *,
         callback_confirmacion: CallbackConfirmacion | None = None,
-        audit_log: "AuditLog | None" = None,
+        audit_log: AuditLog | None = None,
         sandbox_habilitado: bool = True,
-        sandbox: "Sandbox | None" = None,
+        sandbox: Sandbox | None = None,
     ) -> None:
         self._cwd = (directorio_trabajo or _HOME).resolve()
         self._confirmar = callback_confirmacion or _denegar
@@ -240,7 +240,7 @@ class Terminal:
             self._procesos_activos.pop(proceso.pid or 0, None)
             try:
                 await asyncio.wait_for(proceso.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 proceso.kill()
 
     async def matar_proceso(self, pid: int) -> bool:
@@ -304,9 +304,12 @@ class Terminal:
                             raise PermissionError("git push no confirmado")
 
             # curl | bash — peligro de ejecución remota
-            if "|" in comando_raw and ("bash" in comando_raw or "sh" in comando_raw):
-                if "curl" in comando_raw or "wget" in comando_raw:
-                    raise PermissionError(f"curl|bash bloqueado: {comando_raw}")
+            if (
+                "|" in comando_raw
+                and ("bash" in comando_raw or "sh" in comando_raw)
+                and ("curl" in comando_raw or "wget" in comando_raw)
+            ):
+                raise PermissionError(f"curl|bash bloqueado: {comando_raw}")
 
             # Requieren confirmación
             if binario in _REQUIEREN_CONFIRMACION:
@@ -340,11 +343,11 @@ class Terminal:
 
         try:
             stdout_b, stderr_b = await asyncio.wait_for(proceso.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proceso.kill()
             await proceso.wait()
             self._procesos_activos.pop(proceso.pid or 0, None)
-            raise TimeoutError(f"Comando superó el timeout de {timeout}s: {argv[0]}")
+            raise TimeoutError(f"Comando superó el timeout de {timeout}s: {argv[0]}") from None
         finally:
             self._procesos_activos.pop(proceso.pid or 0, None)
 

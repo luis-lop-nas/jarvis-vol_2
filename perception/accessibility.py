@@ -70,7 +70,7 @@ class ElementTree:
     """Árbol de elementos AX con profundidad máxima configurable."""
 
     element: ElementInfo
-    children: list["ElementTree"] = field(default_factory=list)
+    children: list[ElementTree] = field(default_factory=list)
 
 
 # ── Permiso de accesibilidad ──────────────────────────────────────────────────
@@ -168,8 +168,8 @@ def _get_frontmost_app_sync() -> AppInfo | None:
 def _get_active_window_sync(pid: int) -> WindowInfo | None:
     try:
         from ApplicationServices import (  # type: ignore[import-not-found]
-            AXUIElementCreateApplication,
             AXUIElementCopyAttributeValue,
+            AXUIElementCreateApplication,
         )
 
         ax_app = AXUIElementCreateApplication(pid)

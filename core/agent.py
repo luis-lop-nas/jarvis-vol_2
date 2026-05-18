@@ -11,8 +11,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Callable, TypedDict
+from collections.abc import AsyncGenerator, Callable
+from datetime import UTC, datetime
+from typing import Any, TypedDict
 from uuid import uuid4
 
 from pydantic import BaseModel as _PBase
@@ -20,7 +21,7 @@ from pydantic import BaseModel as _PBase
 from config import settings
 from core.mcp_bus import MCPBus
 from core.planner import PasoAccion, PlanEjecucion, Planner
-from core.reflector import DecisionReflexion, ResultadoPaso, Reflector
+from core.reflector import DecisionReflexion, Reflector, ResultadoPaso
 from memory import Episode, MemorySystem
 from memory.episodic import MemoriaEpisodica
 from memory.short_term import MemoriaCortoPlazo
@@ -109,7 +110,7 @@ class Agente:
         memoria_episodica: MemoriaEpisodica,
         auditoria: AuditLog,
         herramientas: dict[str, Callable[..., Any]] | None = None,
-        callback_confirmacion: Callable[[str], "asyncio.Future[bool]"] | None = None,
+        callback_confirmacion: Callable[[str], asyncio.Future[bool]] | None = None,
         memoria: MemorySystem | None = None,
         mcp_bus: MCPBus | None = None,
     ) -> None:
@@ -369,7 +370,7 @@ class Agente:
                         duration_ms=duracion_ms,
                         error_summary=None,
                         lessons=[],
-                        created_at=datetime.now(timezone.utc),
+                        created_at=datetime.now(UTC),
                     )
                     await self._memoria.record_episode(episodio)
                 except Exception:
@@ -538,7 +539,7 @@ class Agente:
             duracion = int((time.monotonic() - inicio) * 1000)
             return ResultadoPaso(id_paso=paso.id, exito=True, salida=salida, duracion_ms=duracion)
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             duracion = int((time.monotonic() - inicio) * 1000)
             return ResultadoPaso(
                 id_paso=paso.id,
@@ -584,11 +585,11 @@ async def _denegar_por_defecto(descripcion: str) -> bool:
     return False
 
 
-def _construir_grafo_langgraph(agente: "Agente") -> object | None:
+def _construir_grafo_langgraph(agente: Agente) -> object | None:
     """Compila el grafo LangGraph. Devuelve None si langgraph no está disponible."""
     try:
-        from langgraph.graph import StateGraph, END
         from langgraph.checkpoint.memory import MemorySaver
+        from langgraph.graph import END, StateGraph
 
         builder: StateGraph = StateGraph(AgentState)
         builder.add_node("percibir", agente._percibir)

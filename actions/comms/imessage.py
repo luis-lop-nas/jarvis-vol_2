@@ -6,10 +6,10 @@ Enviar mensajes y leer conversaciones siempre requieren confirmación.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
 from actions.system import ControlSistema
 
@@ -76,9 +76,9 @@ class IMessage:
         sistema: ControlSistema | None = None,
         *,
         callback_confirmacion: CallbackConfirmacion | None = None,
-        audit_log: "AuditLog | None" = None,
+        audit_log: AuditLog | None = None,
         contactos_conocidos: set[str] | None = None,
-        auth_manager: "AuthManager | None" = None,
+        auth_manager: AuthManager | None = None,
     ) -> None:
         self._s = sistema or ControlSistema()
         self._confirmar = callback_confirmacion or _denegar

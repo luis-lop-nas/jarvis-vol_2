@@ -79,6 +79,10 @@ class Settings(BaseSettings):
     # --- Logging ---
     log_level: NivelLog = Field(default="INFO")
 
+    # --- Modo de ejecución ---
+    chroma_mode: Literal["local", "docker"] = Field(default="local")
+    use_docker: bool = Field(default=False)
+
     # --- Seguridad ---
     confirmacion_destructiva: bool = Field(default=True)
     max_acciones_autonomas: int = Field(default=10, ge=1)

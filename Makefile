@@ -53,22 +53,55 @@ env: ## Copia .env.example a .env si no existe.
 # Servicios y desarrollo
 # ---------------------------------------------------------------------
 
+.PHONY: services-start
+services-start: ## Arranca ChromaDB, Ollama y n8n sin Docker.
+	bash scripts/start_services.sh
+
+.PHONY: services-stop
+services-stop: ## Para los servicios arrancados por services-start.
+	bash scripts/stop_services.sh
+
+.PHONY: services-status
+services-status: ## Muestra si cada servicio responde.
+	@echo "ChromaDB (:8000):"; \
+	curl -sf http://localhost:8000/api/v1/heartbeat && echo "✅" || echo "❌"; \
+	echo "Ollama  (:11434):"; \
+	curl -sf http://localhost:11434/api/tags >/dev/null && echo "✅" || echo "❌"; \
+	echo "n8n     (:5678):"; \
+	curl -sf http://localhost:5678/healthz >/dev/null && echo "✅" || echo "⚠ (opcional)"
+
 .PHONY: services-up
-services-up: ## Arranca ChromaDB y n8n vía docker compose.
+services-up: ## (Docker) Arranca ChromaDB y n8n vía docker compose.
 	docker compose up -d
 	@echo "✅ Servicios arrancados (ChromaDB:8000, n8n:5678)"
 
 .PHONY: services-down
-services-down: ## Detiene los servicios docker.
+services-down: ## (Docker) Detiene los servicios docker.
 	docker compose down
 
 .PHONY: services-logs
-services-logs: ## Muestra logs en vivo de los servicios.
+services-logs: ## (Docker) Muestra logs en vivo de los servicios.
 	docker compose logs -f
 
 .PHONY: dev
-dev: services-up ## Arranca servicios + agente principal.
+dev: services-start ## Arranca servicios (sin Docker) + agente principal.
 	$(PY) main.py
+
+# ---------------------------------------------------------------------
+# Setup e inicio guiado
+# ---------------------------------------------------------------------
+
+.PHONY: setup
+setup: ## Instalación completa en macOS desde cero.
+	bash scripts/setup_mac.sh
+
+.PHONY: verify
+verify: ## Verifica que todos los componentes están listos.
+	$(PY) scripts/verify_system.py
+
+.PHONY: first-run
+first-run: ## Primer arranque interactivo (configura keys, prueba modelos, lanza).
+	$(PY) scripts/first_run.py
 
 # ---------------------------------------------------------------------
 # Tests y calidad
@@ -84,6 +117,26 @@ test: ## Ejecuta pytest con cobertura.
 test-fast: ## Ejecuta tests sin cobertura (más rápido).
 	$(PYTEST) -v --tb=short -x
 
+.PHONY: test-e2e
+test-e2e: ## Tests end-to-end (requiere ChromaDB + Ollama corriendo).
+	$(PYTEST) -m e2e -v --tb=short
+
+.PHONY: test-perf
+test-perf: ## Benchmarks de rendimiento (M3 8 GB).
+	$(PYTEST) tests/e2e/test_performance.py -v --tb=short
+
+.PHONY: test-all
+test-all: ## Todos los tests: unitarios + e2e + benchmarks.
+	$(PYTEST) -v --tb=short \
+		--cov=core --cov=models --cov=memory --cov=actions --cov=security \
+		--cov-report=term-missing --cov-report=html
+	$(PYTEST) -m e2e -v --tb=short
+
+.PHONY: coverage
+coverage: ## Cobertura completa y abre el informe HTML.
+	$(PYTEST) --cov=. --cov-report=html --cov-report=term-missing
+	open htmlcov/index.html
+
 .PHONY: lint
 lint: ## Ruff + mypy (chequeo estricto).
 	$(RUFF) check .
@@ -94,6 +147,10 @@ lint: ## Ruff + mypy (chequeo estricto).
 format: ## Formatea el código con ruff.
 	$(RUFF) check --fix .
 	$(RUFF) format .
+
+.PHONY: logs
+logs: ## Muestra el audit log de hoy en tiempo real.
+	tail -f ~/Library/Logs/JARVIS/audit_$$(date +%Y-%m-%d).jsonl
 
 # ---------------------------------------------------------------------
 # Ollama
@@ -144,3 +201,7 @@ clean-data: ## ⚠️ Elimina volúmenes de ChromaDB y n8n. Pide confirmación.
 clean-all: clean ## Limpia caches + venv.
 	rm -rf $(VENV)
 	@echo "🧹 venv eliminado."
+
+.PHONY: reset
+reset: clean clean-data install services-start ## Limpieza total + reinstalación completa.
+	@echo "🔄 Reset completado. Ejecuta: make first-run"

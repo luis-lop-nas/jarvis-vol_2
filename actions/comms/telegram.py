@@ -7,10 +7,10 @@ Enviar mensajes y archivos siempre requieren confirmación.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
 
 CallbackConfirmacion = Callable[[str], "asyncio.Future[bool]"]
 
@@ -74,7 +74,7 @@ class Telegram:
         token: str,
         *,
         callback_confirmacion: CallbackConfirmacion | None = None,
-        audit_log: "AuditLog | None" = None,
+        audit_log: AuditLog | None = None,
     ) -> None:
         from telegram import Bot
         self._bot = Bot(token=token)

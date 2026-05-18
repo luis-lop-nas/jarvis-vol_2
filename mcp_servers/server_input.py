@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from actions.keyboard_mouse import RatonTeclado
 from mcp_servers.base import MCPTool, campo, schema_objeto

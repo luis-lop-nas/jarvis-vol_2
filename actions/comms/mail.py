@@ -6,9 +6,9 @@ Lectura de mensajes y envío con confirmación obligatoria.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable
 
 from actions.system import ControlSistema
 
@@ -62,8 +62,8 @@ class Mail:
         sistema: ControlSistema | None = None,
         *,
         callback_confirmacion: CallbackConfirmacion | None = None,
-        audit_log: "AuditLog | None" = None,
-        auth_manager: "AuthManager | None" = None,
+        audit_log: AuditLog | None = None,
+        auth_manager: AuthManager | None = None,
     ) -> None:
         self._s = sistema or ControlSistema()
         self._confirmar = callback_confirmacion or _denegar

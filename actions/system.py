@@ -6,10 +6,8 @@ Toda interacción con el sistema macOS pasa por este módulo.
 from __future__ import annotations
 
 import asyncio
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-
 
 # ---------------------------------------------------------------------------
 # Tipos públicos
@@ -211,12 +209,6 @@ class ControlSistema:
         Ejemplo::
             brillo = await cs.obtener_brillo()
         """
-        script = (
-            'tell application "System Preferences"\n'
-            '  activate\n'
-            'end tell\n'
-            'do shell script "brightness -l 2>&1 | grep brightness | awk \'{ print int($NF * 100) }\'"'
-        )
         res = await self._applescript(
             'do shell script "brightness -l 2>&1 | grep -oE \'[0-9]+\\.[0-9]+\' | awk \'{ print int($1 * 100) }\'"'
         )
@@ -448,7 +440,7 @@ class ControlSistema:
             if proc.returncode != 0:
                 return None
             return stdout.decode(errors="replace").strip()
-        except (asyncio.TimeoutError, FileNotFoundError):
+        except (TimeoutError, FileNotFoundError):
             return None
 
     async def _bundle_a_nombre(self, bundle_id: str) -> str | None:
@@ -470,7 +462,7 @@ class ControlSistema:
             )
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=self._TIMEOUT_AS)
             return stdout.decode(errors="replace").strip() if proc.returncode == 0 else None
-        except (asyncio.TimeoutError, FileNotFoundError):
+        except (TimeoutError, FileNotFoundError):
             return None
 
     async def _ejecutar_shell(self, cmd: str) -> str | None:
@@ -482,7 +474,7 @@ class ControlSistema:
             )
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=self._TIMEOUT_AS)
             return stdout.decode(errors="replace").strip() if proc.returncode == 0 else None
-        except (asyncio.TimeoutError, FileNotFoundError):
+        except (TimeoutError, FileNotFoundError):
             return None
 
     @staticmethod

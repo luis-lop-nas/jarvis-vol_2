@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
 from memory.long_term import LongTermMemory, MemoryEntry
-from models.base import BaseModel as ModelBase, Mensaje
+from models.base import BaseModel as ModelBase
+from models.base import Mensaje
 
 
 class Episode(BaseModel):
@@ -24,7 +25,7 @@ class Episode(BaseModel):
     duration_ms: int = 0
     error_summary: str | None = None
     lessons: list[str] = Field(default_factory=list)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     model_used: str = ""
 
 

@@ -13,7 +13,7 @@ import io
 import logging
 import re
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +34,7 @@ class AuditEntry(BaseModel):
     """Entrada del log de auditoría."""
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     session_id: str
     action_type: str   # "filesystem" | "terminal" | "browser" | "comms" | "system"
     action: str

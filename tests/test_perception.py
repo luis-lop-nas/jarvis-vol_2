@@ -8,12 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import time
-from collections.abc import Callable
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import AsyncMock, patch
 
 # ── Screenshot ────────────────────────────────────────────────────────────────
 PNG_FAKE = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64  # cabecera PNG válida
@@ -147,10 +143,9 @@ class TestSystemState:
             task = await ss_mod.watch_state(lambda e: llamadas.append(e), interval=0.01)
             await asyncio.sleep(0.08)
             task.cancel()
-            try:
+            import contextlib
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
 
         assert len(llamadas) >= 1, "El callback debe haberse llamado al menos una vez"
         assert llamadas[0].active_app is not None

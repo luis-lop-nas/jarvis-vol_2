@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -25,8 +25,8 @@ class Workflow(BaseModel):
     success_count: int = 0
     failure_count: int = 0
     avg_duration_ms: int = 0
-    last_used: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_used: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     auto_learned: bool = True
 
 
@@ -89,7 +89,7 @@ class ProceduralMemory:
             success_count=1,
             failure_count=0,
             avg_duration_ms=episode.duration_ms,
-            last_used=datetime.now(timezone.utc),
+            last_used=datetime.now(UTC),
             auto_learned=True,
         )
         await self.save_workflow(nueva)
@@ -108,7 +108,7 @@ class ProceduralMemory:
         total = max(1, workflow.success_count + workflow.failure_count)
         anterior = int(entry.metadata.get("avg_duration_ms", workflow.avg_duration_ms))
         workflow.avg_duration_ms = int((anterior * (total - 1) + workflow.avg_duration_ms) / total)
-        workflow.last_used = datetime.now(timezone.utc)
+        workflow.last_used = datetime.now(UTC)
 
         entry.metadata.update(workflow.model_dump(exclude={"id", "description"}))
         await self._store.update(ident, entry.content)
@@ -133,10 +133,10 @@ class ProceduralMemory:
             lineas.append(f"  - id: {workflow.id}")
             lineas.append(f"    name: {workflow.name}")
             lineas.append(f"    description: {workflow.description}")
-            lineas.append(f"    trigger_patterns:")
+            lineas.append("    trigger_patterns:")
             for pattern in workflow.trigger_patterns:
                 lineas.append(f"      - {pattern}")
-            lineas.append(f"    steps:")
+            lineas.append("    steps:")
             for step in workflow.steps:
                 lineas.append("      -")
                 for key, value in step.items():
@@ -184,7 +184,7 @@ class ProceduralMemory:
                 return datetime.fromisoformat(value)
             except ValueError:
                 pass
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
 
 MemoriaProcedural = ProceduralMemory

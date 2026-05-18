@@ -14,8 +14,9 @@ import logging
 import random
 import time
 from collections import OrderedDict
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, TypeVar
+from typing import Any, TypeVar
 
 import httpx
 
@@ -57,7 +58,7 @@ class RetryPolicy:
                 if codigo not in (429, 500, 502, 503, 504) or intento == self.max_intentos:
                     raise
                 ultimo_error = exc
-            except (httpx.TransportError, asyncio.TimeoutError) as exc:
+            except (TimeoutError, httpx.TransportError) as exc:
                 if intento == self.max_intentos:
                     raise
                 ultimo_error = exc
@@ -164,9 +165,6 @@ def mensaje_a_dict(mensaje: Mensaje) -> dict[str, Any]:
 
     partes: list[dict[str, Any]] = [{"type": "text", "text": mensaje.contenido}]
     for img in mensaje.imagenes_base64:
-        if img.startswith("data:"):
-            url = img
-        else:
-            url = f"data:image/png;base64,{img}"
+        url = img if img.startswith("data:") else f"data:image/png;base64,{img}"
         partes.append({"type": "image_url", "image_url": {"url": url}})
     return {"role": mensaje.rol, "content": partes}

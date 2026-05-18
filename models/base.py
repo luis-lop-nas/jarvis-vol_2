@@ -7,10 +7,11 @@ Define el contrato uniforme (`BaseModel`) y los tipos de datos compartidos
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import Flag, auto
 from types import TracebackType
-from typing import Any, AsyncIterator, Literal, Self
+from typing import Any, Literal, Self
 
 Rol = Literal["system", "user", "assistant", "tool"]
 

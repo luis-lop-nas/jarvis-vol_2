@@ -7,7 +7,6 @@ import enum
 import logging
 import subprocess
 import sys
-from typing import Any
 
 from pydantic import BaseModel
 
@@ -177,15 +176,17 @@ class PermissionsManager:
             pass
 
         try:
-            from perception.accessibility import verificar_permiso_accesibilidad  # type: ignore[import]
+            from perception.accessibility import (
+                verificar_permiso_accesibilidad,  # type: ignore[import]
+            )
             return verificar_permiso_accesibilidad()
         except Exception:
             return False
 
     @staticmethod
     def _check_screen_recording() -> bool:
-        import tempfile
         import os
+        import tempfile
         tmp_path = ""
         granted = False
         try:
@@ -201,8 +202,7 @@ class PermissionsManager:
             granted = False
         finally:
             if tmp_path:
-                try:
+                import contextlib
+                with contextlib.suppress(Exception):
                     os.unlink(tmp_path)
-                except Exception:
-                    pass
         return granted

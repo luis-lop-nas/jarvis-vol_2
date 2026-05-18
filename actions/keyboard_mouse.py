@@ -9,8 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass, field
-from typing import Callable
+from collections.abc import Callable
 
 log = logging.getLogger(__name__)
 
@@ -48,7 +47,7 @@ class RatonTeclado:
         self,
         *,
         callback_confirmacion: CallbackConfirmacion | None = None,
-        audit_log: "AuditLog | None" = None,
+        audit_log: AuditLog | None = None,
     ) -> None:
         self._confirmar = callback_confirmacion or _denegar
         self._audit = audit_log
@@ -112,7 +111,6 @@ class RatonTeclado:
             escala = await rt.factor_escala()
         """
         try:
-            import objc
             from AppKit import NSScreen
             screen = NSScreen.mainScreen()
             if screen is not None:
@@ -138,7 +136,7 @@ class RatonTeclado:
 
     def _posicion_quartz(self) -> tuple[int, int]:
         try:
-            from Quartz import CGEventCreate, CGEventGetLocation, kCGEventNull
+            from Quartz import CGEventCreate, CGEventGetLocation
             evento = CGEventCreate(None)
             loc = CGEventGetLocation(evento)
             return (int(loc.x), int(loc.y))
@@ -171,6 +169,7 @@ class RatonTeclado:
 
     def _mover_quartz(self, x: int, y: int) -> bool:
         try:
+            import CoreGraphics
             from Quartz import (
                 CGEventCreateMouseEvent,
                 CGEventPost,
@@ -178,7 +177,6 @@ class RatonTeclado:
                 kCGHIDEventTap,
                 kCGMouseButtonLeft,
             )
-            import CoreGraphics
             punto = CoreGraphics.CGPoint(x, y)
             evento = CGEventCreateMouseEvent(None, kCGEventMouseMoved, punto, kCGMouseButtonLeft)
             CGEventPost(kCGHIDEventTap, evento)
@@ -209,6 +207,7 @@ class RatonTeclado:
 
     def _click_quartz(self, x: int, y: int, boton: str) -> bool:
         try:
+            import CoreGraphics
             from Quartz import (
                 CGEventCreateMouseEvent,
                 CGEventPost,
@@ -220,7 +219,6 @@ class RatonTeclado:
                 kCGMouseButtonLeft,
                 kCGMouseButtonRight,
             )
-            import CoreGraphics
             punto = CoreGraphics.CGPoint(x, y)
             if boton == "right":
                 tipo_down, tipo_up, btn = kCGEventRightMouseDown, kCGEventRightMouseUp, kCGMouseButtonRight

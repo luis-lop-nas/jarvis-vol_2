@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import logging
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 import orjson
-from pydantic import BaseModel as _PBase, Field
+from pydantic import BaseModel as _PBase
+from pydantic import Field
 
 from core.planner import PasoAccion, PlanEjecucion
-from models.base import BaseModel as _ModelBase, Mensaje
+from models.base import BaseModel as _ModelBase
+from models.base import Mensaje
 
 log = logging.getLogger(__name__)
 
@@ -33,7 +35,7 @@ class ResultadoPaso(_PBase):
     efectos_secundarios: list[str] = Field(default_factory=list)
 
 
-class DecisionReflexion(str, Enum):
+class DecisionReflexion(StrEnum):
     """Decisión del reflector tras evaluar el resultado de un paso."""
 
     CONTINUAR = "continuar"

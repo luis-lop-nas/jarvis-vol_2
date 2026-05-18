@@ -11,7 +11,8 @@ import logging
 import re
 import time
 from collections import defaultdict, deque
-from typing import TYPE_CHECKING, Any, AsyncGenerator
+from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import httpx
@@ -133,7 +134,7 @@ async def _run_agent_task(
 def crear_servidor(
     agente: Agente,
     manager: ConnectionManager,
-    confirmation_manager: "ConfirmationManager | None" = None,
+    confirmation_manager: ConfirmationManager | None = None,
 ) -> FastAPI:
     """Construye la aplicación FastAPI completa con todas las rutas."""
 
@@ -227,7 +228,7 @@ def crear_servidor(
                     if update is None:
                         break
                     yield {"data": orjson.dumps(update.model_dump()).decode()}
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     yield {"data": orjson.dumps({"type": "ping"}).decode()}
 
         return EventSourceResponse(generator())
@@ -335,7 +336,7 @@ def crear_servidor(
             return {"image": encoded, "status": "ok"}
         except Exception:
             log.exception("Error capturando pantalla")
-            raise HTTPException(status_code=500, detail="No se pudo capturar pantalla")
+            raise HTTPException(status_code=500, detail="No se pudo capturar pantalla") from None
 
     # ------------------------------------------------------------------
     # WS /ws — canal bidireccional con el overlay SwiftUI

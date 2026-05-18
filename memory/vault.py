@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from pydantic import BaseModel
 
 from config import settings
-
 
 AuthCallback = Callable[[], Awaitable[bool]]
 
@@ -130,7 +130,7 @@ class Vault:
         """
         try:
             autorizado = await asyncio.wait_for(self._auth_callback(), timeout=self._timeout)
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             raise TimeoutError("Autenticación Face ID no completada en tiempo") from exc
         if not autorizado:
             raise PermissionError("Autenticación requerida para acceder al vault")

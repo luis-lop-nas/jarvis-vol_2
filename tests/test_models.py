@@ -19,7 +19,6 @@ from models.base import (
     BaseModel,
     Mensaje,
     ModelCapability,
-    ModelConfig,
     ModelResponse,
     StreamChunk,
 )
@@ -27,7 +26,6 @@ from models.deepseek import DeepSeekModel
 from models.kimi import KimiModel
 from models.ollama_client import OllamaModel
 from models.openrouter import OpenRouterModel
-
 
 # ---------------------------------------------------------------------------
 # Helpers para mockear httpx

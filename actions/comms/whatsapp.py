@@ -7,10 +7,11 @@ No gestiona login automático — el usuario debe haber iniciado sesión.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 CallbackConfirmacion = Callable[[str], "asyncio.Future[bool]"]
 
@@ -80,7 +81,7 @@ class WhatsApp:
         pagina: Any,
         *,
         callback_confirmacion: CallbackConfirmacion | None = None,
-        audit_log: "AuditLog | None" = None,
+        audit_log: AuditLog | None = None,
     ) -> None:
         self._p = pagina
         self._confirmar = callback_confirmacion or _denegar
