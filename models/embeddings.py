@@ -169,6 +169,18 @@ class EmbeddingsClient:
     async def cerrar(self) -> None:
         await self._proveedor.cerrar()
 
+    async def health_check(self) -> bool:
+        """Verifica que el proveedor local de embeddings responde.
+
+        Returns:
+            `True` si el proveedor está disponible; `False` si falla.
+        """
+        try:
+            return await self._proveedor.health_check()
+        except Exception:
+            log.exception("Health check de embeddings falló")
+            return False
+
     async def __aenter__(self) -> Self:
         return self
 

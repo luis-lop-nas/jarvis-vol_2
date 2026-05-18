@@ -1,94 +1,115 @@
-"""Servidor MCP que expone memoria de largo plazo y vault."""
+"""Servidor MCP que expone la fachada pública `MemorySystem`."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from memory.long_term import MemoriaLargoPlazo
-from memory.vault import Vault
+from memory import MemoryEntry, MemorySystem
+from memory.episodic import Episode
+from mcp_servers.base import MCPTool, campo, schema_objeto, serializar_dato
 
 
 class ServidorMemoria:
-    """Bridge MCP <-> memoria de largo plazo + vault markdown."""
+    """Adaptador MCP para memoria sin exponer submódulos internos."""
 
     nombre = "memory"
 
-    def __init__(
-        self,
-        memoria: MemoriaLargoPlazo | None = None,
-        vault: Vault | None = None,
-    ) -> None:
-        self._memoria = memoria or MemoriaLargoPlazo()
-        self._vault = vault or Vault()
+    def __init__(self, memory_system: MemorySystem | None = None) -> None:
+        self._memory = memory_system or MemorySystem()
 
-    def herramientas(self) -> list[dict[str, Any]]:
+    def herramientas(self) -> list[MCPTool]:
+        """Declara herramientas de memoria disponibles para el bus."""
         return [
-            {
-                "name": "memoria_guardar",
-                "description": "Guarda un texto en la memoria de largo plazo.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "texto": {"type": "string"},
-                        "metadatos": {"type": "object"},
-                    },
-                    "required": ["texto"],
-                },
-            },
-            {
-                "name": "memoria_buscar",
-                "description": "Busca semánticamente en la memoria.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "consulta": {"type": "string"},
-                        "k": {"type": "integer", "default": 5},
-                    },
-                    "required": ["consulta"],
-                },
-            },
-            {
-                "name": "vault_leer",
-                "description": "Lee una nota del vault personal.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"ruta": {"type": "string"}},
-                    "required": ["ruta"],
-                },
-            },
-            {
-                "name": "vault_escribir",
-                "description": "Escribe (o sobrescribe) una nota del vault.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "ruta": {"type": "string"},
-                        "contenido": {"type": "string"},
-                    },
-                    "required": ["ruta", "contenido"],
-                },
-            },
+            MCPTool(
+                name="memory.contexto",
+                description="Construye contexto de memoria.",
+                input_schema=schema_objeto({
+                    "task": campo("string", "Tarea para la que se construye contexto."),
+                    "max_tokens": campo("integer", "Presupuesto máximo aproximado de tokens.", minimum=1),
+                }, ["task"]),
+            ),
+            MCPTool(
+                name="memory.guardar",
+                description="Guarda una entrada de largo plazo.",
+                input_schema=schema_objeto({
+                    "content": campo("string", "Contenido completo a recordar."),
+                    "summary": campo("string", "Resumen corto opcional."),
+                    "category": campo("string", "Categoría: tarea, preferencia, hecho, error o workflow."),
+                    "source": campo("string", "Origen de la memoria."),
+                    "importance": campo("number", "Importancia entre 0.0 y 1.0.", minimum=0, maximum=1),
+                    "metadata": campo("object", "Metadatos planos opcionales."),
+                }, ["content"]),
+                side_effects=["memory.write"],
+            ),
+            MCPTool(
+                name="memory.buscar",
+                description="Busca en memoria semántica.",
+                input_schema=schema_objeto({
+                    "query": campo("string", "Consulta semántica."),
+                    "limit": campo("integer", "Máximo de resultados.", minimum=1),
+                }, ["query"]),
+            ),
+            MCPTool(
+                name="memory.workflow",
+                description="Busca workflow aplicable.",
+                input_schema=schema_objeto({
+                    "task": campo("string", "Tarea a comparar con workflows aprendidos."),
+                }, ["task"]),
+            ),
+            MCPTool(
+                name="memory.episodio",
+                description="Registra un episodio.",
+                input_schema=schema_objeto({
+                    "episode": campo("object", "Episodio serializado con el schema de memory.Episode."),
+                }, ["episode"]),
+                side_effects=["memory.episode.write"],
+            ),
+            MCPTool(
+                name="memory.health",
+                description="Verifica salud de memoria.",
+                input_schema=schema_objeto(),
+            ),
         ]
 
-    async def ejecutar(self, herramienta: str, argumentos: dict[str, Any]) -> Any:
-        match herramienta:
-            case "memoria_guardar":
-                ident = await self._memoria.guardar(
-                    argumentos["texto"], argumentos.get("metadatos")
+    async def ejecutar(self, tool_name: str, params: dict[str, Any]) -> Any:
+        """Ejecuta una herramienta de memoria.
+
+        Args:
+            tool_name: Nombre canónico de herramienta.
+            params: Parámetros de llamada.
+
+        Returns:
+            Resultado serializable de memoria.
+        """
+        match tool_name:
+            case "memory.contexto":
+                return await self._memory.get_context(
+                    str(params["task"]),
+                    int(params.get("max_tokens", 2000)),
                 )
+            case "memory.guardar":
+                entry = MemoryEntry(
+                    content=str(params["content"]),
+                    summary=str(params.get("summary") or str(params["content"])[:256]),
+                    category=str(params.get("category", "hecho")),
+                    source=str(params.get("source", "conversacion")),
+                    importance=float(params.get("importance", 0.6)),
+                    metadata=dict(params.get("metadata", {})),
+                )
+                ident = await self._memory.store_memory(entry)
                 return {"id": ident}
-            case "memoria_buscar":
-                fragmentos = await self._memoria.buscar(
-                    argumentos["consulta"], k=argumentos.get("k", 5)
+            case "memory.buscar":
+                entradas = await self._memory.search_memory(
+                    str(params["query"]),
+                    limit=int(params.get("limit", 5)),
                 )
-                return [f.__dict__ for f in fragmentos]
-            case "vault_leer":
-                nota = await self._vault.leer(argumentos["ruta"])
-                return {"titulo": nota.titulo, "contenido": nota.contenido}
-            case "vault_escribir":
-                ruta = await self._vault.escribir(
-                    argumentos["ruta"], argumentos["contenido"]
-                )
-                return {"ruta": str(ruta)}
+                return serializar_dato(entradas)
+            case "memory.workflow":
+                return serializar_dato(await self._memory.find_workflow(str(params["task"])))
+            case "memory.episodio":
+                episode = Episode(**dict(params["episode"]))
+                return {"id": await self._memory.record_episode(episode)}
+            case "memory.health":
+                return await self._memory.health_check()
             case _:
-                raise ValueError(f"Herramienta desconocida: {herramienta}")
+                raise ValueError(f"Herramienta memory desconocida: {tool_name}")

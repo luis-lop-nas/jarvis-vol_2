@@ -66,14 +66,14 @@ class LongTermMemory:
 
     async def store(self, entry: MemoryEntry) -> str:
         """Almacena una entrada semántica persistente y devuelve su id."""
-        self._require_collection()
+        coleccion = self._collection()
         if not entry.summary:
             entry.summary = entry.content[:256]
         entry.last_accessed = datetime.now(timezone.utc)
         vector = await self._embeddings.embed_text(entry.content)
 
         await asyncio.to_thread(
-            self._coleccion.add,
+            coleccion.add,
             ids=[entry.id],
             documents=[entry.content],
             embeddings=[vector],
@@ -89,11 +89,11 @@ class LongTermMemory:
         category_filter: str | None = None,
     ) -> list[MemoryEntry]:
         """Busca semánticamente las entradas más relevantes para la consulta."""
-        self._require_collection()
+        coleccion = self._collection()
         filtro = {"category": category_filter} if category_filter else None
         vector = await self._embeddings.embed_text(query)
         resultado = await asyncio.to_thread(
-            self._coleccion.query,
+            coleccion.query,
             query_embeddings=[vector],
             n_results=limit,
             where=filtro,
@@ -112,12 +112,12 @@ class LongTermMemory:
 
     async def get(self, ident: str) -> MemoryEntry | None:
         """Recupera una entrada por su id."""
-        self._require_collection()
+        coleccion = self._collection()
         try:
             resultado = await asyncio.to_thread(
-                self._coleccion.get,
+                coleccion.get,
                 ids=[ident],
-                include=["documents", "metadatas", "ids"],
+                include=["documents", "metadatas"],
             )
         except Exception:
             return None
@@ -138,13 +138,14 @@ class LongTermMemory:
         actual = await self.get(ident)
         if actual is None:
             return False
+        coleccion = self._collection()
         actual.content = content
         actual.summary = content[:256]
         actual.last_accessed = datetime.now(timezone.utc)
         vector = await self._embeddings.embed_text(content)
 
         await asyncio.to_thread(
-            self._coleccion.update,
+            coleccion.update,
             ids=[ident],
             documents=[content],
             embeddings=[vector],
@@ -155,9 +156,9 @@ class LongTermMemory:
 
     async def delete(self, ident: str) -> bool:
         """Elimina una entrada por su id."""
-        self._require_collection()
+        coleccion = self._collection()
         try:
-            await asyncio.to_thread(self._coleccion.delete, ids=[ident])
+            await asyncio.to_thread(coleccion.delete, ids=[ident])
             log.info("Memoria eliminada: %s", ident)
             return True
         except Exception as exc:
@@ -166,21 +167,21 @@ class LongTermMemory:
 
     async def get_by_category(self, category: str, limit: int = 5) -> list[MemoryEntry]:
         """Recupera entradas de una categoría concreta."""
-        self._require_collection()
+        coleccion = self._collection()
         resultado = await asyncio.to_thread(
-            self._coleccion.get,
+            coleccion.get,
             where={"category": category},
-            include=["ids", "documents", "metadatas"],
+            include=["documents", "metadatas"],
         )
         entradas = self._parse_get_results(resultado)
         return entradas[:limit]
 
     async def get_recent(self, limit: int = 5) -> list[MemoryEntry]:
         """Recupera las entradas más recientes por último acceso."""
-        self._require_collection()
+        coleccion = self._collection()
         resultados = await asyncio.to_thread(
-            self._coleccion.get,
-            include=["ids", "documents", "metadatas"],
+            coleccion.get,
+            include=["documents", "metadatas"],
         )
         entradas = self._parse_get_results(resultados)
         entradas.sort(key=lambda e: e.last_accessed, reverse=True)
@@ -188,10 +189,10 @@ class LongTermMemory:
 
     async def get_important(self, threshold: float = 0.5, limit: int = 5) -> list[MemoryEntry]:
         """Recupera entradas con importancia mayor o igual al umbral."""
-        self._require_collection()
+        coleccion = self._collection()
         resultados = await asyncio.to_thread(
-            self._coleccion.get,
-            include=["ids", "documents", "metadatas"],
+            coleccion.get,
+            include=["documents", "metadatas"],
         )
         entradas = [e for e in self._parse_get_results(resultados) if e.importance >= threshold]
         entradas.sort(key=lambda e: e.importance, reverse=True)
@@ -199,13 +200,13 @@ class LongTermMemory:
 
     async def count(self) -> int:
         """Devuelve el número aproximado de entradas en la colección."""
-        self._require_collection()
+        coleccion = self._collection()
         try:
-            return await asyncio.to_thread(self._coleccion.count)
+            return await asyncio.to_thread(coleccion.count)
         except Exception:
             resultado = await asyncio.to_thread(
-                self._coleccion.get,
-                include=["ids"],
+                coleccion.get,
+                include=[],
             )
             return len(resultado.get("ids", []))
 
@@ -223,7 +224,12 @@ class LongTermMemory:
             return False
         try:
             await asyncio.to_thread(self._coleccion.count)
-            return await self._embeddings._proveedor.health_check()
+            if hasattr(self._embeddings, "health_check"):
+                return bool(await self._embeddings.health_check())
+            proveedor = getattr(self._embeddings, "_proveedor", None)
+            if proveedor is not None and hasattr(proveedor, "health_check"):
+                return bool(await proveedor.health_check())
+            return True
         except Exception:
             return False
 
@@ -231,14 +237,18 @@ class LongTermMemory:
     # Helpers privados
     # ------------------------------------------------------------------
 
-    def _require_collection(self) -> None:
-        """Garantiza que la colección ChromaDB está disponible.
+    def _collection(self) -> Any:
+        """Devuelve la colección ChromaDB disponible.
 
         Raises:
             RuntimeError: Si ChromaDB no está conectado.
+
+        Returns:
+            Colección activa para operaciones de lectura/escritura.
         """
         if self._coleccion is None:
             raise RuntimeError("ChromaDB no está disponible")
+        return self._coleccion
 
     def _parse_query_results(self, resultado: dict[str, Any]) -> list[MemoryEntry]:
         ids = resultado.get("ids", [[]])[0]
@@ -277,8 +287,18 @@ class LongTermMemory:
         return entradas
 
     def _keyword_search(self, query: str, limit: int) -> list[MemoryEntry]:
+        """Busca coincidencias literales en contenido y resumen.
+
+        Args:
+            query: Texto buscado.
+            limit: Número máximo de entradas devueltas.
+
+        Returns:
+            Entradas cuyo contenido o resumen contienen la consulta.
+        """
         texto = query.lower()
-        resultado = self._coleccion.get(include=["ids", "documents", "metadatas"])
+        coleccion = self._collection()
+        resultado = coleccion.get(include=["documents", "metadatas"])
         entradas = self._parse_get_results(resultado)
         encontrados = [
             e for e in entradas
@@ -287,8 +307,17 @@ class LongTermMemory:
         return encontrados[:limit]
 
     async def _update_entry_metadata(self, entry: MemoryEntry) -> None:
+        """Actualiza solo los metadatos de una entrada.
+
+        Args:
+            entry: Entrada con metadatos y estadísticas nuevas.
+
+        Returns:
+            None.
+        """
+        coleccion = self._collection()
         await asyncio.to_thread(
-            self._coleccion.update,
+            coleccion.update,
             ids=[entry.id],
             metadatas=[self._metadata_from_entry(entry)],
         )

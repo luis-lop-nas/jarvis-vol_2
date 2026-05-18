@@ -158,6 +158,9 @@ async def test_short_term_context_window() -> None:
     ventana = await memoria.get_context_window(max_tokens=9)
     assert [m.content for m in ventana] == ["dos", "tres"]
 
+    ventana_estricta = await memoria.get_context_window(max_tokens=2)
+    assert ventana_estricta == []
+
 
 @pytest.mark.asyncio
 async def test_long_term_store_and_search() -> None:

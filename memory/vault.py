@@ -5,10 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
-from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from config import settings
 
@@ -120,6 +119,15 @@ class Vault:
     # ------------------------------------------------------------------
 
     async def _authorize(self) -> None:
+        """Ejecuta la autorización local antes de tocar 1Password.
+
+        Raises:
+            TimeoutError: Si Face ID no responde dentro del timeout.
+            PermissionError: Si el usuario no autoriza la operación.
+
+        Returns:
+            None.
+        """
         try:
             autorizado = await asyncio.wait_for(self._auth_callback(), timeout=self._timeout)
         except asyncio.TimeoutError as exc:
@@ -128,10 +136,30 @@ class Vault:
             raise PermissionError("Autenticación requerida para acceder al vault")
 
     async def _get_item_json(self, title: str) -> dict[str, Any]:
+        """Obtiene un item completo de 1Password en formato JSON.
+
+        Args:
+            title: Título del item en 1Password.
+
+        Returns:
+            Diccionario decodificado devuelto por `op`.
+        """
         salida = await self._run_op("item", "get", title, "--format", "json")
         return json.loads(salida)
 
     async def _run_op(self, *args: str) -> str:
+        """Ejecuta la CLI `op` de forma asíncrona.
+
+        Args:
+            *args: Argumentos pasados a `op`.
+
+        Raises:
+            FileNotFoundError: Si la CLI no está instalada.
+            RuntimeError: Si `op` devuelve un código distinto de cero.
+
+        Returns:
+            Salida estándar decodificada como UTF-8.
+        """
         if not await self.is_available():
             raise FileNotFoundError(
                 "La CLI 'op' de 1Password no está instalada. Instálala con: "
@@ -152,4 +180,9 @@ class Vault:
 
     @staticmethod
     async def _deny_by_default() -> bool:
+        """Deniega el acceso al vault cuando no hay autenticador configurado.
+
+        Returns:
+            Siempre `False`.
+        """
         return False

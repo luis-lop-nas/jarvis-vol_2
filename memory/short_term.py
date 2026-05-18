@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from datetime import datetime, timezone
-from typing import Any, Iterable, Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -72,7 +72,7 @@ class ShortTermMemory:
         mensajes: list[Message] = []
         total = 0
         for mensaje in reversed(self._buffer):
-            if total + mensaje.tokens_estimate > max_tokens and mensajes:
+            if total + mensaje.tokens_estimate > max_tokens:
                 break
             mensajes.append(mensaje)
             total += mensaje.tokens_estimate
@@ -141,6 +141,11 @@ class ShortTermMemory:
         return len(self._buffer)
 
     async def _ensure_capacity(self) -> None:
+        """Comprime mensajes antiguos hasta respetar límites configurados.
+
+        Returns:
+            None.
+        """
         if len(self._buffer) <= self._max_messages and self._total_tokens() <= self._max_tokens:
             return
 
@@ -159,6 +164,11 @@ class ShortTermMemory:
             self._buffer.appendleft(resumen_mensaje)
 
     def _total_tokens(self) -> int:
+        """Calcula los tokens estimados actualmente en el buffer.
+
+        Returns:
+            Suma de `tokens_estimate` de todos los mensajes.
+        """
         return sum(m.tokens_estimate for m in self._buffer)
 
     @staticmethod

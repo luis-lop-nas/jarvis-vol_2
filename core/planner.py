@@ -37,7 +37,7 @@ _HERRAMIENTAS_VALIDAS: frozenset[str] = frozenset({
     "browser.abrir", "browser.leer", "browser.click",
     "browser.fill", "browser.ejecutar_js", "browser.screenshot",
     "percepcion.screenshot", "percepcion.accesibilidad",
-    "mail.leer", "mail.enviar",
+    "mail.leer", "mail.enviar", "mail.eliminar",
     "imessage.leer", "imessage.enviar",
     "whatsapp.leer", "whatsapp.enviar",
     "telegram.leer", "telegram.enviar",

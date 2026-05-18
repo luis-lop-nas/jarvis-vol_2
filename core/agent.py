@@ -15,9 +15,10 @@ from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Callable, TypedDict
 from uuid import uuid4
 
-from pydantic import BaseModel as _PBase, Field
+from pydantic import BaseModel as _PBase
 
 from config import settings
+from core.mcp_bus import MCPBus
 from core.planner import PasoAccion, PlanEjecucion, Planner
 from core.reflector import DecisionReflexion, ResultadoPaso, Reflector
 from memory import Episode, MemorySystem
@@ -110,6 +111,7 @@ class Agente:
         herramientas: dict[str, Callable[..., Any]] | None = None,
         callback_confirmacion: Callable[[str], "asyncio.Future[bool]"] | None = None,
         memoria: MemorySystem | None = None,
+        mcp_bus: MCPBus | None = None,
     ) -> None:
         self._planner = planner
         self._reflector = reflector
@@ -119,6 +121,7 @@ class Agente:
         self._auditoria = auditoria
         self._herramientas: dict[str, Callable[..., Any]] = herramientas or {}
         self._confirmar = callback_confirmacion or _denegar_por_defecto
+        self._mcp_bus = mcp_bus
 
         # Sesiones activas. Cada sesión tiene su propio lock para evitar race conditions
         # entre run(), resume() y cancel() concurrentes.
@@ -181,6 +184,17 @@ class Agente:
 
             while True:
                 # Comprobaciones de límites y cancelación
+                if time.monotonic() - inicio >= TIMEOUT_TAREA_GLOBAL:
+                    yield ActualizacionAgente(
+                        tipo="error",
+                        mensaje=(
+                            f"Timeout global: tarea superó "
+                            f"{TIMEOUT_TAREA_GLOBAL:.0f}s."
+                        ),
+                        progreso=1.0,
+                    )
+                    return
+
                 if sid in self._cancelaciones:
                     yield ActualizacionAgente(tipo="error", mensaje="Tarea cancelada.", progreso=1.0)
                     return
@@ -337,6 +351,7 @@ class Agente:
                 try:
                     resumen = await self._reflector.generate_summary(plan, completados)
                 except Exception:
+                    log.exception("Error generando resumen final")
                     resumen = "Tarea completada."
             else:
                 resumen = "Tarea completada."
@@ -475,7 +490,7 @@ class Agente:
         inicio = time.monotonic()
         try:
             fn = self._herramientas.get(paso.herramienta)
-            if fn is None:
+            if fn is None and self._mcp_bus is None:
                 raise KeyError(f"Herramienta no registrada: {paso.herramienta}")
 
             # Rechazar claves que podrían sobreescribir defaults de seguridad
@@ -483,6 +498,29 @@ class Agente:
             if claves_prohibidas:
                 raise ValueError(
                     f"Parámetros prohibidos en '{paso.herramienta}': {claves_prohibidas}"
+                )
+
+            if fn is None:
+                assert self._mcp_bus is not None
+                tarea_mcp: asyncio.Task[object] = asyncio.create_task(
+                    self._mcp_bus.execute(
+                        paso.herramienta,
+                        paso.parametros,
+                        session_id=session_id,
+                        requires_confirmation=paso.requiere_confirmacion,
+                    )
+                )
+                if session_id:
+                    self._tareas_paso[session_id] = tarea_mcp  # type: ignore[assignment]
+                resultado_mcp = await tarea_mcp
+                duracion = int((time.monotonic() - inicio) * 1000)
+                return ResultadoPaso(
+                    id_paso=paso.id,
+                    exito=resultado_mcp.success,
+                    salida=resultado_mcp.data,
+                    error=resultado_mcp.error,
+                    duracion_ms=duracion,
+                    efectos_secundarios=resultado_mcp.side_effects,
                 )
 
             if asyncio.iscoroutinefunction(fn):
@@ -535,6 +573,14 @@ class Agente:
 
 
 async def _denegar_por_defecto(descripcion: str) -> bool:
+    """Deniega confirmaciones cuando no hay callback explícito.
+
+    Args:
+        descripcion: Descripción de la acción que solicita autorización.
+
+    Returns:
+        Siempre `False` para mantener comportamiento fail-closed.
+    """
     return False
 
 

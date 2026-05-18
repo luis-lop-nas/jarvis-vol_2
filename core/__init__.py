@@ -1,6 +1,7 @@
 """Núcleo del agente: orquestación, planificación, reflexión y enrutado."""
 
 from core.agent import ActualizacionAgente, AgentState, Agente
+from core.mcp_bus import MCPBus
 from core.planner import PasoAccion, PlanEjecucion, Planner
 from core.reflector import DecisionReflexion, ResultadoPaso, Reflector
 from core.router import (
@@ -21,6 +22,7 @@ __all__ = [
     "DecisionRouter",
     "ModelRouter",
     "ModelSelection",
+    "MCPBus",
     "ModeloDestino",
     "PasoAccion",
     "PlanEjecucion",

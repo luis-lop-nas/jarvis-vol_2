@@ -14,7 +14,7 @@
 - **Fase 4 — Acciones:** ✅ completada
 - **Fase 5 — Loop principal del agente:** ✅ completada
 - **Fase 6 — Sistema completo de memoria:** ✅ completada
-- **Fase 7 — MCP servers:** ⏳ pendiente
+- **Fase 7 — MCP servers:** ✅ completada
 
 ---
 
@@ -57,6 +57,25 @@
 - **`tests/test_memory.py`** — 12 tests con ChromaDB, Ollama y 1Password completamente mockeados: overflow, ventana de contexto, store/search, híbrida deduplicada, episodios, lecciones, workflows, Face ID, `op` ausente, integración de fachada y health check.
 - **Suite completa:** 138/138 verde en 13.22 s.
 
+### Fase 7 — MCP servers (2026-05-18)
+- **`mcp_servers/base.py`** — Contrato MCP interno con `MCPRequest`, `MCPResult`, `MCPTool`, protocolo `MCPServer`, conversión a formato `tools/list`, helpers de JSON Schema, validación de parámetros y `serializar_dato()` para dataclasses, Pydantic, `Path`, fechas y bytes.
+- **`core/mcp_bus.py`** — `MCPBus`: registro de servidores, listado de herramientas, dispatch async con timeout, validación de `input_schema`, resultados normalizados, auditoría centralizada, sanitización de secretos (`api_key`, token, password, etc.) y bloqueo fail-closed de herramientas sensibles sin confirmación explícita.
+- **`mcp_servers/server_filesystem.py`** — Adaptador sobre `SistemaArchivos` con nombres canónicos del planner: `filesystem.leer`, `filesystem.escribir`, `filesystem.listar`, `filesystem.buscar`, `filesystem.mover`, `filesystem.copiar`, `filesystem.eliminar`. Respeta sandbox y confirmaciones de acciones destructivas.
+- **`mcp_servers/server_memory.py`** — Adaptador sobre la fachada pública `MemorySystem`: `memory.contexto`, `memory.guardar`, `memory.buscar`, `memory.workflow`, `memory.episodio`, `memory.health`.
+- **`mcp_servers/server_code.py`** — Adaptador sobre `Terminal`: `terminal.ejecutar`, `terminal.python`, `terminal.transmitir`.
+- **`mcp_servers/server_system.py`** — Adaptador sobre `ControlSistema`: apps, volumen, brillo, clipboard y notificaciones.
+- **`mcp_servers/server_browser.py`** — Adaptador sobre `Navegador` + `ControlSafari`: lectura/abrir URL, lectura de pestaña activa, click, fill, JS con confirmación y screenshot/descarga.
+- **`mcp_servers/server_comms.py`** — Adaptador sobre Mail, iMessage, Telegram y WhatsApp Web inyectado; acepta los aliases del prompt (`destinatario`, `mensaje`, `nombre_chat`) y falla claro si Telegram/WhatsApp no están configurados.
+- **`mcp_servers/server_input.py`** — Adaptador sobre `RatonTeclado`: escribir, atajos, clicks, doble click y scroll.
+- **`mcp_servers/server_perception.py`** — Adaptador sobre percepción: screenshot y accesibilidad.
+- **`mcp_servers/stdio_server.py`** — Servidor MCP stdio real sobre el bus interno: soporta `initialize`, `tools/list`, `tools/call` y notificaciones `notifications/*`; arranca con `python -m mcp_servers` sin añadir dependencia runtime al SDK externo.
+- **`mcp_servers/__init__.py`** — Factory `crear_bus_mcp()` con servidores por defecto y sin ciclos de importación.
+- **`core/agent.py`** — Integración con `MCPBus`: mantiene herramientas inyectadas para tests, y si no existe callable local ejecuta vía MCP. Los `MCPResult` se convierten a `ResultadoPaso` y las llamadas MCP activas son cancelables por sesión.
+- **Schemas MCP:** todas las herramientas reales exponen `inputSchema` tipo objeto con propiedades, requeridos y `additionalProperties`; `MCPBus` rechaza llamadas inválidas antes de tocar `actions/`.
+- **Tests añadidos:** `tests/test_mcp_bus.py`, `tests/test_mcp_filesystem.py`, `tests/test_mcp_memory.py`, `tests/test_mcp_comms.py`, `tests/test_mcp_stdio.py`, `tests/test_agent_mcp.py`.
+- **Debug profundo post-fase:** verificación planner↔MCP OK (`pedir_aclaracion` queda como pseudoacción conversacional; `memory.*` son extras del bus), confirmaciones sensibles reforzadas, WhatsApp sin placeholder roto, aliases de parámetros alineados con el prompt y cobertura de `teclado.*`/`percepcion.*`.
+- **Verificación:** `python3 -m compileall -q mcp_servers core tests` OK; `python3 -m compileall -q actions config core memory mcp_servers models perception security tests main.py` OK; suite completa: **157/157 verde en 13.86 s**.
+
 ### Fase 5 — Loop principal del agente (2026-05-18)
 - **`core/planner.py`** — Reescrito con Pydantic: `PasoAccion` (reemplaza `PasoPlan`), `PlanEjecucion` (reemplaza `Plan`). Métodos: `plan()`, `replan()`, `validate_plan()` (detecta herramientas inválidas, confirmaciones faltantes, ciclos DFS), `estimate_complexity()` (0.0–1.0), `crear_plan()` (compat.). `frozenset` de herramientas válidas y de confirmación obligatoria.
 - **`core/reflector.py`** — Reescrito con `ResultadoPaso` (Pydantic) y `DecisionReflexion` (str Enum: CONTINUAR, REINTENTAR, REPLANIFICAR, ABORTAR, ESPERAR_USUARIO). Reglas deterministas: PermissionError→ABORTAR, FileNotFoundError→REPLANIFICAR, TimeoutError→REINTENTAR/ABORTAR, MAX_REINTENTOS=3→REPLANIFICAR. `evaluate_task_completion()`, `generate_summary()`.
@@ -95,23 +114,24 @@
 
 ## 🔄 En progreso
 
-_(nada activo — Fase 6 memoria completada)_
+_(nada activo — Fase 7 MCP completada)_
 
 ---
 
-## ⏳ Siguiente a implementar (Fase 7 — MCP servers)
+## ⏳ Siguiente a implementar (Fase 8 — Confirmación real + UI runtime)
 
-Bus MCP que conecte el agente con las acciones:
+Conectar el agente operativo a una interfaz humana segura:
 
-1. **Bus MCP en `core/agent.py`** — enrutar herramientas inyectables hacia `mcp_servers/*` sin importar `actions/` desde `core/`.
-2. **`mcp_servers/server_filesystem.py`** — primer servidor 100 % testeado (lectura/escritura/listar) con tests que prueben el sandbox de raíz.
-3. **`mcp_servers/server_memory.py`** — exponer la fachada `MemorySystem` como interfaz pública MCP, manteniendo los módulos internos privados.
-4. **`security/confirmation.py`** — implementar callbacks reales (notificación nativa macOS y prompt en el WebSocket) en vez del fail-closed por defecto.
-5. **Pruebas e2e** — flujo agente→MCP mock→acción con confirmación auto-aprobada.
+1. **`security/confirmation.py`** — callbacks reales por WebSocket/UI, notificación macOS y timeout fail-closed.
+2. **`interface/websocket.py`** — canal de eventos de agente: actualizaciones, solicitudes de confirmación, respuesta/cancelación.
+3. **`interface/api.py`** — endpoints para crear sesión, ejecutar tarea, pausar, resumir, cancelar y consultar health.
+4. **Runtime wiring en `main.py`** — construir modelos, router, planner, reflector, `MemorySystem`, `MCPBus`, audit log y callbacks reales.
+5. **Pruebas e2e runtime** — tarea simple con filesystem MCP, confirmación aprobada/denegada, cancelación y auditoría.
 
 Tests mínimos para cerrar la fase:
-- `tests/test_mcp_filesystem.py` — round-trip leer/escribir/listar con sandbox.
-- `tests/test_agent_mcp.py` — flujo end-to-end con MCP mock y confirmación auto-aprobada.
+- `tests/test_confirmation.py` — timeout fail-closed y aprobación explícita.
+- `tests/test_interface.py` — WebSocket/API con confirmación y cancelación.
+- `tests/test_runtime.py` — construcción completa del agente sin tocar servicios reales.
 
 ---
 
@@ -137,6 +157,17 @@ Tests mínimos para cerrar la fase:
 - ADR-32: **Embeddings siempre locales** — `LongTermMemory` usa `models.embeddings.EmbeddingsClient`; no hay envío de memoria a APIs cloud para embeddings.
 - ADR-33: **ChromaDB degradable en tests/CI** — si el servidor no está disponible, la inicialización no rompe imports ni tests del agente; las operaciones de largo plazo fallan de forma explícita y la fachada las registra sin tumbar el loop.
 - ADR-34: **Vault fail-closed con autorización inyectable** — todo `get_*` exige autorización previa; en producción se conectará a Face ID, en tests se mockea sin tocar secretos reales.
+
+### 2026-05-18 (Fase 7 — MCP)
+- ADR-35: **Nombres canónicos iguales al planner** — el bus MCP expone `filesystem.leer`, `terminal.ejecutar`, etc.; se eliminan nombres paralelos tipo `fs_leer` para evitar traducciones frágiles.
+- ADR-36: **Bus MCP como frontera de ejecución** — `core/agent.py` conserva herramientas inyectables para tests, pero en runtime puede delegar en `MCPBus` sin importar `actions/`.
+- ADR-37: **Auditoría centralizada en MCPBus** — cada llamada y resultado registra herramienta, parámetros sanitizados, duración, error y efectos secundarios. Secretos nunca se escriben en logs.
+- ADR-38: **Servidores como adaptadores finos** — `mcp_servers/*` no reimplementan lógica; solo traducen nombres/params hacia `actions/` o `MemorySystem`.
+- ADR-39: **Resultados MCP normalizados** — toda ejecución devuelve `MCPResult`; el agente lo convierte a `ResultadoPaso`, manteniendo el loop de reflexión igual.
+- ADR-40: **Confirmación sensible también en el bus** — aunque el planner marque `requiere_confirmacion`, el `MCPBus` vuelve a validar `MCPTool.requires_confirmation`. Si falta la confirmación explícita, la ejecución no llega al adaptador.
+- ADR-41: **WhatsApp MCP por inyección de sesión** — el servidor no crea Playwright ni fuerza login; usa un objeto `WhatsApp` ya inicializado por runtime. Sin sesión, devuelve `RuntimeError("WhatsApp no configurado")`.
+- ADR-42: **Schemas antes de side effects** — cada herramienta declara `inputSchema` y el `MCPBus` valida requeridos/tipos básicos antes de ejecutar. Los errores de parámetros son `ValidationError` normalizados, no `KeyError` tardíos dentro de `actions/`.
+- ADR-43: **MCP stdio sin dependencia dura al SDK** — se implementa el subconjunto necesario de JSON-RPC/MCP (`initialize`, `tools/list`, `tools/call`) sobre el bus existente. Esto permite usar `python -m mcp_servers` incluso si el SDK `mcp` no está instalado; si más adelante se adopta FastMCP, la frontera pública ya está testeada.
 
 ### 2026-05-18 (Fase 4 — Acciones)
 - ADR-20: **Callback de confirmación inyectable en cada clase de acción** — en lugar de depender del `GestorConfirmacion` de `security/` (que requiere `PasoPlan`), cada clase acepta un `CallbackConfirmacion: Callable[[str], Future[bool]]`. Evita el ciclo de importación `actions/ → core/planner.py`. Default fail-closed.
@@ -173,7 +204,7 @@ Tests mínimos para cerrar la fase:
 - `main.py` debe llamar a `solicitar_permiso_accesibilidad()` en startup si `verificar_permiso_accesibilidad()` devuelve False.
 
 ### Deudas previas
-- `actions/comms/mail.py::listar_no_leidos` devuelve `[]` (placeholder explícito).
+- WhatsApp MCP requiere que el runtime inyecte una sesión Playwright ya inicializada; el servidor no la crea por defecto.
 - `pyobjc-framework-*` solo se importan dentro de los métodos para no romper en Linux/CI.
 - Pylance avisa de parámetros sin usar en `__aexit__`; es esperado (firma del protocolo).
 - No instalado todavía en el venv del proyecto: dependencias pesadas (chromadb, playwright, fastapi). `make install` las instala todas la primera vez.

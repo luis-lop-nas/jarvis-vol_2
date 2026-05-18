@@ -9,7 +9,7 @@ from typing import Any
 
 from config import settings
 from memory.episodic import EpisodicMemory, Episode
-from memory.long_term import LongTermMemory, MemoryEntry
+from memory.long_term import COLECCION_WORKFLOWS, LongTermMemory, MemoryEntry
 from memory.procedural import ProceduralMemory, Workflow
 from memory.short_term import Message, ShortTermMemory
 from memory.vault import Vault
@@ -49,7 +49,11 @@ class MemorySystem:
         )
         self._long_term = long_term or LongTermMemory(collection_name=settings.chroma_collection)
         self._episodic = episodic or EpisodicMemory(store=self._long_term, summarizer=summarizer)
-        self._procedural = procedural or ProceduralMemory(store=self._long_term, summarizer=summarizer)
+        if procedural is None:
+            workflow_store = LongTermMemory(collection_name=COLECCION_WORKFLOWS)
+            self._procedural = ProceduralMemory(store=workflow_store, summarizer=summarizer)
+        else:
+            self._procedural = procedural
         self._vault = vault or Vault()
 
     async def store_interaction(
@@ -127,6 +131,29 @@ class MemorySystem:
         except Exception as exc:
             log.debug("Memoria procedural no disponible: %s", exc)
             return None
+
+    async def store_memory(self, entry: MemoryEntry) -> str:
+        """Guarda una entrada explícita en memoria de largo plazo.
+
+        Args:
+            entry: Entrada Pydantic de memoria persistente.
+
+        Returns:
+            Identificador de la entrada guardada.
+        """
+        return await self._long_term.store(entry)
+
+    async def search_memory(self, query: str, limit: int = 5) -> list[MemoryEntry]:
+        """Busca en memoria de largo plazo con estrategia híbrida.
+
+        Args:
+            query: Consulta del usuario o tarea actual.
+            limit: Máximo de resultados.
+
+        Returns:
+            Entradas relevantes deduplicadas.
+        """
+        return await self._long_term.search_hybrid(query, limit=limit)
 
     async def get_secret(self, service: str) -> str | None:
         """Recupera un secreto de 1Password usando el servicio indicado."""

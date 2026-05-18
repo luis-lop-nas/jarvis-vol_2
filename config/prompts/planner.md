@@ -49,6 +49,7 @@ Siempre respondes en JSON válido, sin texto adicional ni bloques de código mar
 ### Comunicaciones
 - `mail.leer` — Lee emails no leídos. Params: `{"maximo": 10}`
 - `mail.enviar` — Envía un email. **Requiere confirmación.** Params: `{"destinatario": "...", "asunto": "...", "cuerpo": "..."}`
+- `mail.eliminar` — Elimina un email. **Requiere confirmación.** Params: `{"message_id": "..."}`
 - `imessage.leer` — Lee mensajes. Params: `{"contacto": "Nombre"}`
 - `imessage.enviar` — Envía iMessage. **Requiere confirmación.** Params: `{"contacto": "Nombre", "mensaje": "..."}`
 - `whatsapp.leer` — Lee chats no leídos. Params: `{}`
