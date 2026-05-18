@@ -1,8 +1,8 @@
 """Núcleo del agente: orquestación, planificación, reflexión y enrutado."""
 
-from core.agent import Agente
-from core.planner import Planner
-from core.reflector import Reflector
+from core.agent import ActualizacionAgente, AgentState, Agente
+from core.planner import PasoAccion, PlanEjecucion, Planner
+from core.reflector import DecisionReflexion, ResultadoPaso, Reflector
 from core.router import (
     ContextoRuteo,
     DecisionRouter,
@@ -13,13 +13,19 @@ from core.router import (
 )
 
 __all__ = [
+    "ActualizacionAgente",
+    "AgentState",
     "Agente",
     "ContextoRuteo",
+    "DecisionReflexion",
     "DecisionRouter",
     "ModelRouter",
     "ModelSelection",
     "ModeloDestino",
+    "PasoAccion",
+    "PlanEjecucion",
     "Planner",
     "Reflector",
+    "ResultadoPaso",
     "Router",
 ]

@@ -43,6 +43,9 @@ pytesseract>=0.3.13
 
 # --- Comunicaciones ---
 python-telegram-bot>=21.0
+pytesseract>=0.3.13
+Pillow>=11.0.0
+pyautogui>=0.9.54
 
 # --- Utilidades ---
 tenacity>=9.0.0

@@ -2,67 +2,184 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import logging
+from enum import Enum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import orjson
+from pydantic import BaseModel as _PBase, Field
 
-from core.planner import Plan
-from models.base import BaseModel, Mensaje
+from core.planner import PasoAccion, PlanEjecucion
+from models.base import BaseModel as _ModelBase, Mensaje
+
+log = logging.getLogger(__name__)
 
 RUTA_PROMPT = Path(__file__).parent.parent / "config" / "prompts" / "reflector.md"
 
-Veredicto = Literal["exito", "fallo_parcial", "fallo_total", "requiere_humano"]
-SiguienteAccion = Literal["continuar", "reintentar", "replanificar", "parar"]
+
+class ResultadoPaso(_PBase):
+    """Resultado de ejecutar un paso del plan.
+
+    Ejemplo::
+        r = ResultadoPaso(id_paso="paso_1", exito=True, salida="contenido")
+    """
+
+    id_paso: str
+    exito: bool
+    salida: Any = None
+    error: str | None = None
+    duracion_ms: int = 0
+    efectos_secundarios: list[str] = Field(default_factory=list)
 
 
-@dataclass(slots=True)
-class Reflexion:
-    """Resultado estructurado de la reflexión sobre la ejecución."""
+class DecisionReflexion(str, Enum):
+    """Decisión del reflector tras evaluar el resultado de un paso."""
 
-    veredicto: Veredicto
-    razonamiento: str
-    criterio_exito_cumplido: bool
-    siguiente_accion: SiguienteAccion
-    aprendizaje: str | None = None
+    CONTINUAR = "continuar"
+    REINTENTAR = "reintentar"
+    REPLANIFICAR = "replanificar"
+    ABORTAR = "abortar"
+    ESPERAR_USUARIO = "esperar_usuario"
 
 
 class Reflector:
-    """Pide al modelo una autoevaluación tras ejecutar un plan."""
+    """Evalúa el resultado de cada paso y decide cómo continuar.
 
-    def __init__(self, modelo: BaseModel) -> None:
+    Combina reglas deterministas (sin LLM) con razonamiento LLM para casos ambiguos.
+
+    Ejemplo::
+        decision = await reflector.reflect(paso, resultado, plan, historial)
+        if decision == DecisionReflexion.CONTINUAR:
+            ...
+    """
+
+    MAX_REINTENTOS = 3
+
+    def __init__(self, modelo: _ModelBase) -> None:
         self._modelo = modelo
-        self._prompt_sistema = RUTA_PROMPT.read_text(encoding="utf-8")
+        try:
+            self._prompt_sistema = RUTA_PROMPT.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            self._prompt_sistema = (
+                "Eres el reflector de JARVIS. Evalúa el resultado del paso "
+                "y responde SOLO con una de: continuar, reintentar, replanificar, "
+                "abortar, esperar_usuario"
+            )
 
-    async def reflexionar(self, plan: Plan, resultado: dict[str, Any]) -> Reflexion:
-        """Devuelve la `Reflexion` correspondiente al plan ejecutado."""
+    async def reflect(
+        self,
+        paso: PasoAccion,
+        resultado: ResultadoPaso,
+        plan: PlanEjecucion,
+        historial: list[ResultadoPaso],
+    ) -> DecisionReflexion:
+        """Decide cómo continuar tras ejecutar un paso.
+
+        Aplica reglas deterministas primero; solo llama al LLM si no resuelven.
+
+        Ejemplo::
+            d = await reflector.reflect(paso, res, plan, [])
+        """
+        if resultado.exito:
+            return DecisionReflexion.CONTINUAR
+
+        error = resultado.error or ""
+
+        # Reglas deterministas — sin LLM
+        if "PermissionError" in error:
+            return DecisionReflexion.ABORTAR
+
+        if "FileNotFoundError" in error:
+            return DecisionReflexion.REPLANIFICAR
+
+        if "TimeoutError" in error:
+            reintentos = _contar_reintentos(paso.id, historial)
+            if reintentos >= self.MAX_REINTENTOS:
+                return DecisionReflexion.ABORTAR
+            return DecisionReflexion.REINTENTAR
+
+        if not paso.puede_fallar:
+            reintentos = _contar_reintentos(paso.id, historial)
+            if reintentos >= self.MAX_REINTENTOS:
+                return DecisionReflexion.REPLANIFICAR
+            return DecisionReflexion.REINTENTAR
+
+        # Paso puede fallar → continuar de todas formas
+        return DecisionReflexion.CONTINUAR
+
+    def evaluate_task_completion(
+        self, plan: PlanEjecucion, resultados: list[ResultadoPaso]
+    ) -> bool:
+        """True si todos los pasos obligatorios del plan completaron con éxito.
+
+        Ejemplo::
+            done = reflector.evaluate_task_completion(plan, resultados)
+        """
+        ids_exitosos = {r.id_paso for r in resultados if r.exito}
+        return all(p.id in ids_exitosos for p in plan.pasos if not p.puede_fallar)
+
+    async def generate_summary(
+        self, plan: PlanEjecucion, resultados: list[ResultadoPaso]
+    ) -> str:
+        """Genera un resumen en español de lo que JARVIS hizo y el resultado.
+
+        Ejemplo::
+            texto = await reflector.generate_summary(plan, resultados)
+        """
+        exitosos = sum(1 for r in resultados if r.exito)
+        total = len(resultados)
+        completada = self.evaluate_task_completion(plan, resultados)
+        detalle = "\n".join(
+            f"- {r.id_paso}: {'OK' if r.exito else 'FALLO'}"
+            + (f" — {r.error}" if r.error else "")
+            for r in resultados
+        )
         prompt = (
-            f"Plan original:\n{orjson.dumps(plan.__dict__, default=str).decode()}\n\n"
-            f"Resultado de la ejecución:\n{orjson.dumps(resultado, default=str).decode()}"
+            f"Tarea: {plan.tarea}\n"
+            f"Pasos completados: {exitosos}/{total}\n"
+            f"¿Tarea completada? {'Sí' if completada else 'No'}\n\n"
+            f"{detalle}\n\n"
+            "Escribe un resumen breve (2-3 frases) en español para el usuario."
         )
         respuesta = await self._modelo.complete(
             [
-                Mensaje(rol="system", contenido=self._prompt_sistema),
+                Mensaje(rol="system", contenido="Eres el asistente de JARVIS. Resume en español."),
                 Mensaje(rol="user", contenido=prompt),
             ],
-            temperatura=0.1,
+            temperatura=0.3,
+            max_tokens=256,
         )
-        return self._parsear(respuesta.content)
+        return respuesta.content.strip()
 
-    @staticmethod
-    def _parsear(texto: str) -> Reflexion:
-        limpio = texto.strip()
-        if limpio.startswith("```"):
-            limpio = limpio.split("```")[1]
-            if limpio.startswith("json"):
-                limpio = limpio[4:]
-            limpio = limpio.strip()
-        datos = orjson.loads(limpio)
-        return Reflexion(
-            veredicto=datos["veredicto"],
-            razonamiento=datos["razonamiento"],
-            criterio_exito_cumplido=bool(datos.get("criterio_exito_cumplido", False)),
-            siguiente_accion=datos["siguiente_accion"],
-            aprendizaje=datos.get("aprendizaje"),
+    async def _reflexion_llm(
+        self,
+        paso: PasoAccion,
+        resultado: ResultadoPaso,
+        plan: PlanEjecucion,
+    ) -> DecisionReflexion:
+        datos = {"paso": paso.model_dump(), "resultado": resultado.model_dump(), "tarea": plan.tarea}
+        respuesta = await self._modelo.complete(
+            [
+                Mensaje(rol="system", contenido=self._prompt_sistema),
+                Mensaje(
+                    rol="user",
+                    contenido=(
+                        "Evalúa y responde SOLO una de: "
+                        "continuar, reintentar, replanificar, abortar, esperar_usuario\n\n"
+                        + orjson.dumps(datos, default=str).decode()
+                    ),
+                ),
+            ],
+            temperatura=0.1,
+            max_tokens=50,
         )
+        texto = respuesta.content.strip().lower()
+        try:
+            return DecisionReflexion(texto)
+        except ValueError:
+            return DecisionReflexion.REPLANIFICAR
+
+
+def _contar_reintentos(id_paso: str, historial: list[ResultadoPaso]) -> int:
+    return sum(1 for r in historial if r.id_paso == id_paso and not r.exito)
