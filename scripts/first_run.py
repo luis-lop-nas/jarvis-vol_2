@@ -219,7 +219,7 @@ async def step_test_memory() -> None:
     try:
         import chromadb  # type: ignore[import]
         client = chromadb.HttpClient(host="localhost", port=8000)
-        col_name = "_jarvis_first_run_test"
+        col_name = "jarvis_first_run_test"
         # crear colección temporal
         col = client.get_or_create_collection(col_name)
         col.add(
