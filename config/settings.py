@@ -90,6 +90,9 @@ class Settings(BaseSettings):
     sandbox_enabled: bool = Field(default=True)
     security_docker_sandbox_enabled: bool = Field(default=False)
 
+    # --- Sesiones ---
+    session_ttl_hours: int = Field(default=24, ge=1)
+
     # --- MCP / Observabilidad ---
     mcp_otel_enabled: bool = Field(default=False)
 

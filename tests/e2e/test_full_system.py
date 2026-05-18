@@ -418,8 +418,10 @@ def test_e2e_websocket_protocol(jarvis_stack: dict) -> None:
     app = jarvis_stack["app"]
 
     with TestClient(app) as tc:
-        # Ping → pong
+        # Ping → pong (el primer mensaje al conectar es session_state; consumir primero)
         with tc.websocket_connect("/ws?session_id=e2e-proto") as ws:
+            state_msg = orjson.loads(ws.receive_text())
+            assert state_msg["type"] == "session_state"
             ws.send_text(orjson.dumps({"type": "ping"}).decode())
             pong = orjson.loads(ws.receive_text())
             assert pong["type"] == "pong"

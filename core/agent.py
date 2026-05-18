@@ -131,6 +131,7 @@ class Agente:
         self._cancelaciones: set[str] = set()
         self._locks_sesion: dict[str, asyncio.Lock] = {}
         self._tareas_paso: dict[str, asyncio.Task[ResultadoPaso]] = {}
+        self._estados: dict[str, AgentState] = {}
 
         # Grafo LangGraph — compilado para documentación estructural y uso futuro
         self._grafo = _construir_grafo_langgraph(self)
@@ -139,10 +140,24 @@ class Agente:
     # API pública
     # ------------------------------------------------------------------
 
+    def get_state(self, session_id: str) -> AgentState | None:
+        """Devuelve el último AgentState conocido de la sesión, o None si no existe.
+
+        Ejemplo::
+            state = agente.get_state("abc123")
+        """
+        return self._estados.get(session_id)
+
     async def run(
-        self, tarea: str, session_id: str = ""
+        self,
+        tarea: str,
+        session_id: str = "",
+        initial_state: AgentState | None = None,
     ) -> AsyncGenerator[ActualizacionAgente, None]:
         """Ejecuta una tarea y emite actualizaciones por streaming.
+
+        Si se proporciona initial_state (sesión restaurada desde disco), el agente
+        reanuda desde el último punto de control en lugar de empezar desde cero.
 
         Ejemplo::
             async for u in agente.run("abre Safari"):
@@ -154,23 +169,36 @@ class Agente:
         self._eventos_resume[sid] = evento
         self._locks_sesion[sid] = lock
 
-        estado: AgentState = {
-            "messages": [Mensaje(rol="user", contenido=tarea)],
-            "current_task": tarea,
-            "current_plan": None,
-            "completed_steps": [],
-            "failed_steps": [],
-            "retry_count": 0,
-            "replan_count": 0,
-            "system_context": {},
-            "memory_context": "",
-            "waiting_for_user": False,
-            "paso_pendiente_confirmacion": None,
-            "abort_reason": None,
-            "session_id": sid,
-            "indice_paso_actual": 0,
-            "tarea_completada": False,
-        }
+        if initial_state is not None:
+            estado: AgentState = {
+                **initial_state,
+                "session_id": sid,
+                "messages": list(initial_state.get("messages", [])) + [
+                    Mensaje(rol="user", contenido=tarea)
+                ],
+                "current_task": tarea,
+                "abort_reason": None,
+                "system_context": {},
+            }
+        else:
+            estado = {
+                "messages": [Mensaje(rol="user", contenido=tarea)],
+                "current_task": tarea,
+                "current_plan": None,
+                "completed_steps": [],
+                "failed_steps": [],
+                "retry_count": 0,
+                "replan_count": 0,
+                "system_context": {},
+                "memory_context": "",
+                "waiting_for_user": False,
+                "paso_pendiente_confirmacion": None,
+                "abort_reason": None,
+                "session_id": sid,
+                "indice_paso_actual": 0,
+                "tarea_completada": False,
+            }
+        self._estados[sid] = estado
         inicio = time.monotonic()
 
         await self._auditoria.registrar("tarea_iniciada", {"tarea": tarea, "session_id": sid})
@@ -179,6 +207,7 @@ class Agente:
         try:
             # Percibir estado inicial del sistema
             estado = await self._percibir(estado)
+            self._estados[sid] = estado
 
             pasos_ejecutados = 0
             replanes = 0
@@ -217,6 +246,7 @@ class Agente:
                 # Pensar: planificar si no hay plan, comprobar si está completo
                 yield ActualizacionAgente(tipo="pensando", mensaje="Analizando tarea…")
                 estado = await self._pensar(estado)
+                self._estados[sid] = estado
 
                 if estado.get("abort_reason"):
                     continue  # próxima iteración emitirá el error
@@ -277,6 +307,7 @@ class Agente:
                     fallidos_new.append(resultado)
 
                 estado = {**estado, "completed_steps": completados_new, "failed_steps": fallidos_new}
+                self._estados[sid] = estado
                 await self._auditoria.registrar(
                     "paso_ejecutado",
                     {"paso": paso.id, "exito": resultado.exito, "error": resultado.error},
@@ -384,6 +415,7 @@ class Agente:
             self._cancelaciones.discard(sid)
             self._locks_sesion.pop(sid, None)
             self._tareas_paso.pop(sid, None)
+            self._estados.pop(sid, None)
 
     async def resume(self, session_id: str, respuesta: str) -> bool:
         """Reanuda un agente en estado WAIT_USER.

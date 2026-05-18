@@ -175,6 +175,22 @@ ollama-status: ## Lista los modelos instalados localmente.
 # Limpieza
 # ---------------------------------------------------------------------
 
+# ---------------------------------------------------------------------
+# Overlay SwiftUI
+# ---------------------------------------------------------------------
+
+.PHONY: overlay
+overlay: ## Compila y firma el overlay SwiftUI (lee APPLE_DEVELOPER_ID de .env).
+	bash interface/swiftui/build.sh release
+
+.PHONY: overlay-debug
+overlay-debug: ## Compila el overlay en modo debug (sin firma).
+	bash interface/swiftui/build.sh debug
+
+# ---------------------------------------------------------------------
+# Limpieza
+# ---------------------------------------------------------------------
+
 .PHONY: clean
 clean: ## Elimina caches, .pyc, builds y logs temporales.
 	find . -type d -name "__pycache__" -prune -exec rm -rf {} +

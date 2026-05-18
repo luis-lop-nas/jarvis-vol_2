@@ -167,6 +167,23 @@
 
 ## ✅ Completado recientemente
 
+### Persistencia de sesiones + Dashboard + WebSocket state + Distribución overlay (2026-05-19)
+
+- **`interface/session_store.py`** (nuevo) — `SessionStore`: serializa `AgentState` a JSON en `~/.jarvis/sessions/{session_id}.json` tras cada `ActualizacionAgente`. Al restaurar: si `waiting_for_user=True` con paso pendiente → se marca como fallido + `waiting_for_user=False` para forzar replanificación. `load()` verifica TTL y elimina expiradas. `cleanup_expired()` (async) escanea el directorio, elimina expiradas y corruptas. `list_sessions()` devuelve metadatos para el dashboard.
+- **`interface/dashboard.py`** (nuevo) — HTML+JS vanilla: `build_dashboard_html()` genera el panel. Sin dependencias frontend externas. Muestra sesiones persistidas (task, estado, cuándo), audit log (últimas 50 entradas vía GET /audit), estado del sistema (ChromaDB, Ollama, RAM, MCP), botón cancelar (POST /cancel/{session_id}). Auto-refresh cada 5s con fetch().
+- **`interface/api.py`** — `crear_servidor()` acepta `session_store: SessionStore | None`. Startup lifespan lanza `cleanup_expired()` como tarea background (migrado de `@app.on_event` a `lifespan`). `POST /chat` carga estado desde disco si existe y no hay tarea activa. `_run_agent_task()` acepta `initial_state` y guarda estado tras cada update. Nuevas rutas: `GET /` (dashboard HTML), `GET /sessions` (metadatos para el dashboard). WS `/ws`: tras `manager.connect()` envía `{"type":"session_state", "session_state":"idle|thinking|acting|waiting|done|error", "current_step": ..., "pending_confirmation": ... | null}`.
+- **`core/agent.py`** — `self._estados: dict[str, AgentState]` para tracking por sesión. `get_state(session_id)` expone el último estado. `run()` acepta `initial_state: AgentState | None`; si se provee, reutiliza el estado previo y añade el nuevo mensaje. `self._estados[sid]` se actualiza tras cada mutación del estado dentro del loop. Limpieza en `finally`.
+- **`config/settings.py`** — `session_ttl_hours: int = 24`.
+- **`interface/swiftui/build.sh`** — Soporte de firma y notarización: si `APPLE_DEVELOPER_ID` está vacío → build sin firma (desarrollo local). Si está presente → `codesign --options runtime`, `xcrun notarytool submit --wait`, `xcrun stapler staple`. Carga `.env` automáticamente.
+- **`Makefile`** — `make overlay` (release firmado), `make overlay-debug` (sin firma).
+- **`.env.example`** — `SESSION_TTL_HOURS`, `APPLE_DEVELOPER_ID`, `APPLE_NOTARY_PROFILE`, `APPLE_BUNDLE_ID` con instrucciones.
+- **`README.md`** — Sección "Overlay SwiftUI — instalación en macOS": desarrollo local, distribución paso a paso, notarización manual. Sección "Dashboard web". Tabla `make` actualizada.
+- **ADRs**: ADR-80 (session_state WS message enviado al connect — permite al overlay sincronizar estado sin esperar al siguiente update del agente), ADR-81 (SessionStore best-effort — errores de I/O se loggean sin propagar, la persistencia nunca bloquea al agente), ADR-82 (lifespan en lugar de on_event deprecated — cleanup_expired() como create_task en startup), ADR-83 (system_context no se persiste — contiene datos de sistema que caducan; se repuebla en el siguiente ciclo percibir).
+- **Tests nuevos** (14): `test_session_persists_across_restart`, `test_session_restores_agent_state`, `test_session_restores_messages`, `test_session_waiting_for_user_marked_failed`, `test_session_ttl_cleanup`, `test_session_load_returns_none_if_expired`, `test_session_load_returns_none_if_not_found`, `test_session_delete_removes_file`, `test_session_cleanup_removes_corrupt_files`, `test_list_sessions_returns_metadata`, `test_websocket_reconnect_sends_state`, `test_websocket_reconnect_sends_last_known_state`, `test_websocket_reconnect_pending_confirmation`, `test_dashboard_devuelve_html`, `test_sessions_sin_store_devuelve_lista_vacia`.
+- **Suite completa: 291/291 verde (+ 1 skip fastmcp) en ~21s**.
+
+
+
 ### Mejoras de memoria — Mem0 + Zep + LangMem (2026-05-19)
 
 - **`memory/long_term.py`** — Deduplicación activa en `store()`: antes de insertar, busca entradas similares en la misma categoría con `_search_with_scores()`. Si sim ≥ 0.99 → skip silencioso; sim ≥ `memory_dedup_threshold` (0.92) + Jaccard alto → complement (merge de contenidos + update); Jaccard bajo → contradict (expire la entrada antigua con `valid_until = ahora` + crea nueva). `MemoryEntry` añade `updated_at`, `version: int`, `valid_from: datetime | None`, `valid_until: datetime | None`. `search()` y `search_hybrid()` filtran expiradas por defecto (`include_expired: bool = False`). `count_expired()` cuenta entradas con `valid_until` pasado. Dedup loggea con `rich` a stderr.
@@ -222,12 +239,15 @@ _(nada activo)_
 
 ## ⏳ Siguientes candidatos
 
-1. **Persistencia de sesiones** — guardar/restaurar sesiones activas en disco para sobrevivir reinicios del servidor.
-2. **Distribución del overlay** — `interface/swiftui/build.sh` ya preparado. Firma y notarización. Auto-update system.
-3. **Dashboard web** — panel `http://localhost:8765` con historial de sesiones, logs y estado del sistema.
+1. ~~**Persistencia de sesiones**~~ — resuelto 2026-05-19 (`interface/session_store.py`).
+2. ~~**Distribución del overlay**~~ — resuelto 2026-05-19 (`build.sh` con firma/notarización, `make overlay`).
+3. ~~**Dashboard web**~~ — resuelto 2026-05-19 (`interface/dashboard.py`, `GET /`, `GET /sessions`).
 4. ~~**Scoping de confirmaciones por sesión**~~ — resuelto 2026-05-19 (hallazgo crítico del auditor).
 5. ~~**Migración FastMCP + scoping herramientas + health check**~~ — resuelto 2026-05-19.
 6. ~~**Mejoras de memoria (Mem0 + Zep + LangMem)**~~ — resuelto 2026-05-19.
+7. **Auto-update del overlay** — sistema de versionado + actualización automática desde servidor de distribución. (Pendiente: requiere servidor externo.)
+8. **STT/TTS** — integración Groq Whisper + Kokoro local para interacción por voz.
+9. **Integración n8n** — workflows para notificaciones proactivas y tareas programadas.
 
 ---
 

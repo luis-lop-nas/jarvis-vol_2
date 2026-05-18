@@ -114,6 +114,63 @@ Copia `.env.example` a `.env` y rellena:
 
 El resto de variables tienen valores por defecto razonables para desarrollo local.
 
+## Overlay SwiftUI — instalación en macOS
+
+El overlay nativo JARVIS se muestra en la barra de notificaciones y reacciona
+al estado del agente en tiempo real. Requiere macOS 14+ y Xcode 15+.
+
+### Desarrollo local (sin firma)
+
+```bash
+make overlay          # compila y copia JARVIS.app a ~/Applications/
+open ~/Applications/JARVIS.app
+```
+
+Si Xcode no encuentra el proyecto, ábrelo primero:
+```bash
+open -a Xcode interface/swiftui/JARVIS.xcodeproj
+```
+
+### Distribución (firma + notarización Apple)
+
+1. Consigue un certificado **Developer ID Application** en
+   [developer.apple.com/account](https://developer.apple.com/account).
+
+2. Configura las credenciales de notarización (solo una vez):
+   ```bash
+   xcrun notarytool store-credentials jarvis-notary \
+       --apple-id tu@email.com \
+       --team-id XXXXXXXXXX \
+       --password "xxxx-xxxx-xxxx-xxxx"   # App-Specific Password
+   ```
+
+3. Añade tu Developer ID a `.env`:
+   ```
+   APPLE_DEVELOPER_ID=Developer ID Application: Tu Nombre (XXXXXXXXXX)
+   APPLE_NOTARY_PROFILE=jarvis-notary
+   ```
+
+4. Compila, firma y notariza:
+   ```bash
+   make overlay
+   ```
+   El script ejecuta automáticamente `codesign`, `notarytool submit --wait` y
+   `stapler staple`. Al terminar, `JARVIS.app` está lista para distribuir.
+
+> La notarización no está configurada en CI — solo se ejecuta manualmente cuando
+> se quiere preparar una versión para distribuir.
+
+## Dashboard web
+
+Con el servidor en marcha, abre `http://localhost:8765` para ver:
+
+- Sesiones persistidas en disco (última tarea, estado, cuándo se guardó)
+- Últimas 50 entradas del audit log
+- Estado de ChromaDB, Ollama, RAM y MCP servers
+- Botón "Cancelar" por sesión
+
+El dashboard se actualiza automáticamente cada 5 segundos.
+
 ## Targets de make
 
 | Target | Descripción |
@@ -122,6 +179,8 @@ El resto de variables tienen valores por defecto razonables para desarrollo loca
 | `make verify` | Verifica que todos los servicios están OK |
 | `make first-run` | Primer arranque interactivo guiado |
 | `make dev` | Arranca servicios + agente |
+| `make overlay` | Compila y firma el overlay SwiftUI |
+| `make overlay-debug` | Compila overlay en modo debug (sin firma) |
 | `make test` | Tests unitarios con cobertura |
 | `make test-e2e` | Tests end-to-end |
 | `make test-perf` | Benchmarks de rendimiento |

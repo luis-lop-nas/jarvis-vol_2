@@ -38,12 +38,13 @@ def make_agente(updates: list[ActualizacionAgente] | None = None) -> MagicMock:
     agente = MagicMock()
 
     async def _run(
-        tarea: str, session_id: str = ""
+        tarea: str, session_id: str = "", initial_state=None
     ) -> AsyncGenerator[ActualizacionAgente, None]:
         for u in _updates:
             yield u
 
     agente.run = _run
+    agente.get_state = MagicMock(return_value=None)
     agente.resume = AsyncMock(return_value=True)
     agente.cancel = AsyncMock(return_value=True)
     return agente
@@ -122,7 +123,7 @@ async def test_chat_cancela_tarea_previa(manager):
     """Si hay una tarea activa al llegar una nueva, se cancela la anterior."""
     bloqueado = asyncio.Event()
 
-    async def _run_infinito(tarea: str, session_id: str = ""):
+    async def _run_infinito(tarea: str, session_id: str = "", initial_state=None):
         # Bloquea hasta que el test lo libere — simula tarea larga
         await bloqueado.wait()
         yield ActualizacionAgente(tipo="listo", mensaje="OK", progreso=1.0)
@@ -323,6 +324,9 @@ async def test_rate_limit_429_al_superar_10_por_segundo(manager):
 
 def test_websocket_ping_pong(app):
     with TestClient(app) as tc, tc.websocket_connect("/ws?session_id=ws-ping") as ws:
+        # Consumir el session_state enviado al conectar
+        session_state = orjson.loads(ws.receive_text())
+        assert session_state["type"] == "session_state"
         ws.send_text(orjson.dumps({"type": "ping"}).decode())
         data = orjson.loads(ws.receive_text())
         assert data["type"] == "pong"
@@ -330,13 +334,16 @@ def test_websocket_ping_pong(app):
 
 def test_websocket_json_invalido_devuelve_error(app):
     with TestClient(app) as tc, tc.websocket_connect("/ws?session_id=ws-json") as ws:
+        # Consumir el session_state enviado al conectar
+        session_state = orjson.loads(ws.receive_text())
+        assert session_state["type"] == "session_state"
         ws.send_text("esto no es json{{{")
         data = orjson.loads(ws.receive_text())
         assert data["type"] == "error"
 
 
 def test_websocket_reconexion_recibe_buffer(manager):
-    """Al reconectar, el cliente recibe los mensajes del buffer pendiente."""
+    """Al reconectar, el cliente recibe el buffer y luego el session_state."""
     manager._buffers["buf-sid"] = deque(
         [{"type": "done", "message": "Completado.", "progress": 1.0, "state": "silent"}],
         maxlen=50,
@@ -345,5 +352,93 @@ def test_websocket_reconexion_recibe_buffer(manager):
     app2 = crear_servidor(agente, manager)
 
     with TestClient(app2) as tc, tc.websocket_connect("/ws?session_id=buf-sid") as ws:
-        data = orjson.loads(ws.receive_text())
-        assert data["message"] == "Completado."
+        # El buffer se envía primero, luego el session_state
+        buf_msg = orjson.loads(ws.receive_text())
+        assert buf_msg["message"] == "Completado."
+        state_msg = orjson.loads(ws.receive_text())
+        assert state_msg["type"] == "session_state"
+
+
+# ---------------------------------------------------------------------------
+# WebSocket — session_state al reconectar
+# ---------------------------------------------------------------------------
+
+
+def test_websocket_reconnect_sends_state(manager):
+    """Al conectar, el servidor envía un mensaje session_state tras el buffer."""
+    agente = make_agente()
+    app2 = crear_servidor(agente, manager)
+
+    with TestClient(app2) as tc, tc.websocket_connect("/ws?session_id=state-sid") as ws:
+        msg = orjson.loads(ws.receive_text())
+        assert msg["type"] == "session_state"
+        assert "session_state" in msg
+        assert msg["session_state"] == "idle"
+        assert "current_step" in msg
+        assert "pending_confirmation" in msg
+
+
+def test_websocket_reconnect_sends_last_known_state(manager):
+    """Si hay historial en _session_history, session_state refleja el último tipo."""
+    from interface.api import _session_history
+    from interface.api_models import AgentUpdate
+
+    # _session_history guarda la historia para derivar estado; manager._buffers
+    # guarda lo que se envía al reconectar. Son independientes: aquí solo
+    # el session_state se envía (no el buffer porque manager._buffers está vacío).
+    _session_history["hist-ws"] = deque(
+        [AgentUpdate(type="thinking", message="Analizando…", state="notch")],
+        maxlen=50,
+    )
+    agente = make_agente()
+    app2 = crear_servidor(agente, manager)
+
+    with TestClient(app2) as tc, tc.websocket_connect("/ws?session_id=hist-ws") as ws:
+        # Solo se recibe el session_state (no hay buffer en manager._buffers)
+        msg = orjson.loads(ws.receive_text())
+        assert msg["type"] == "session_state"
+        assert msg["session_state"] == "thinking"
+
+
+def test_websocket_reconnect_pending_confirmation(manager):
+    """Si hay una confirmación pendiente para la sesión, se incluye en session_state."""
+    from unittest.mock import MagicMock
+    from security.confirmation import ConfirmationRequest
+
+    pending_req = ConfirmationRequest(
+        id="req-123",
+        session_id="conf-ws",
+        action_description="Eliminar archivos temporales",
+        risk_level="moderate",
+        requires_auth=False,
+    )
+    cm = MagicMock()
+    cm.get_pending.return_value = [pending_req]
+
+    agente = make_agente()
+    app2 = crear_servidor(agente, manager, confirmation_manager=cm)
+
+    with TestClient(app2) as tc, tc.websocket_connect("/ws?session_id=conf-ws") as ws:
+        msg = orjson.loads(ws.receive_text())
+        assert msg["type"] == "session_state"
+        assert msg["pending_confirmation"] is not None
+        assert msg["pending_confirmation"]["request_id"] == "req-123"
+        assert msg["pending_confirmation"]["action_description"] == "Eliminar archivos temporales"
+
+
+# ---------------------------------------------------------------------------
+# Dashboard y /sessions
+# ---------------------------------------------------------------------------
+
+
+async def test_dashboard_devuelve_html(client):
+    r = await client.get("/")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    assert "JARVIS" in r.text
+
+
+async def test_sessions_sin_store_devuelve_lista_vacia(client):
+    r = await client.get("/sessions")
+    assert r.status_code == 200
+    assert r.json() == []

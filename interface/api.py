@@ -12,6 +12,7 @@ import re
 import time
 from collections import defaultdict, deque
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -21,7 +22,7 @@ import orjson
 import psutil
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 if TYPE_CHECKING:
@@ -39,6 +40,8 @@ from interface.api_models import (
     ConfirmRequest,
     SystemStatus,
 )
+from interface.dashboard import build_dashboard_html
+from interface.session_store import SessionStore
 from interface.websocket import ConnectionManager
 
 log = logging.getLogger(__name__)
@@ -110,16 +113,23 @@ async def _run_agent_task(
     manager: ConnectionManager,
     session_id: str,
     message: str,
+    session_store: SessionStore | None = None,
+    initial_state: Any = None,
 ) -> None:
     """Tarea de fondo: ejecuta el agente y distribuye updates a SSE y WebSocket."""
     queue = _session_queues[session_id]
     try:
-        async for update in agente.run(message, session_id):
+        async for update in agente.run(message, session_id, initial_state=initial_state):
             api_update = _map_update(update)
             hist = _session_history.setdefault(session_id, deque(maxlen=MAX_HISTORY))
             hist.append(api_update)
             await queue.put(api_update)
             await manager.send(session_id, api_update.model_dump())
+            # Persistir estado tras cada update (best-effort)
+            if session_store is not None:
+                state = agente.get_state(session_id)
+                if state is not None:
+                    await session_store.save(session_id, state)
     except Exception:
         log.exception("Error en tarea de agente sesión=%s", session_id)
         err = AgentUpdate(type="error", message="Error interno.", state="silent")
@@ -142,8 +152,15 @@ def crear_servidor(
     confirmation_manager: ConfirmationManager | None = None,
     audit_log: AuditLog | None = None,
     bus: MCPBus | None = None,
+    session_store: SessionStore | None = None,
 ) -> FastAPI:
     """Construye la aplicación FastAPI completa con todas las rutas."""
+
+    @asynccontextmanager
+    async def _lifespan(application: FastAPI):  # type: ignore[type-arg]
+        if session_store is not None:
+            asyncio.create_task(session_store.cleanup_expired())
+        yield
 
     app = FastAPI(
         title="JARVIS",
@@ -151,6 +168,7 @@ def crear_servidor(
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        lifespan=_lifespan,
     )
 
     # CORS — solo localhost
@@ -166,6 +184,14 @@ def crear_servidor(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # ------------------------------------------------------------------
+    # GET / — dashboard web
+    # ------------------------------------------------------------------
+
+    @app.get("/", response_class=HTMLResponse)
+    async def dashboard() -> HTMLResponse:
+        return HTMLResponse(content=build_dashboard_html())
 
     @app.middleware("http")
     async def _log_requests(request: Request, call_next: Any) -> Any:
@@ -205,9 +231,17 @@ def crear_servidor(
         if old and not old.done():
             await agente.cancel(session_id)
 
+        # Restaurar sesión desde disco si existe (y no hay tarea activa)
+        initial_state = None
+        if session_store is not None and (old is None or old.done()):
+            initial_state = await session_store.load(session_id)
+            if initial_state is not None:
+                log.info("Sesión %s restaurada desde disco.", session_id)
+
         _session_queues[session_id] = asyncio.Queue()
         task = asyncio.create_task(
-            _run_agent_task(agente, manager, session_id, req.message)
+            _run_agent_task(agente, manager, session_id, req.message,
+                            session_store=session_store, initial_state=initial_state)
         )
         _session_tasks[session_id] = task
 
@@ -332,6 +366,16 @@ def crear_servidor(
         )
 
     # ------------------------------------------------------------------
+    # GET /sessions — metadatos de sesiones persistidas en disco
+    # ------------------------------------------------------------------
+
+    @app.get("/sessions")
+    async def list_sessions() -> list[dict]:
+        if session_store is None:
+            return []
+        return session_store.list_sessions()
+
+    # ------------------------------------------------------------------
     # GET /history/{session_id} — últimos N mensajes
     # ------------------------------------------------------------------
 
@@ -385,6 +429,40 @@ def crear_servidor(
             await websocket.close(code=1008, reason="session_id inválido")
             return
         await manager.connect(websocket, session_id)
+
+        # Enviar estado actual de la sesión inmediatamente tras reconectar
+        last_hist = list(_session_history.get(session_id, deque()))
+        last_update = last_hist[-1] if last_hist else None
+        task_active = session_id in _session_tasks and not _session_tasks[session_id].done()
+        if last_update is not None:
+            ws_state = last_update.type
+        elif task_active:
+            ws_state = "thinking"
+        else:
+            ws_state = "idle"
+        current_step = (last_update.step.get("id") if last_update and last_update.step else None)
+        pending_conf = None
+        if confirmation_manager is not None:
+            for req in confirmation_manager.get_pending():
+                if req.session_id == session_id:
+                    pending_conf = {
+                        "request_id": req.id,
+                        "action_description": req.action_description,
+                        "command": req.command,
+                        "risk_level": req.risk_level,
+                        "requires_auth": req.requires_auth,
+                    }
+                    break
+        try:
+            await websocket.send_text(orjson.dumps({
+                "type": "session_state",
+                "session_state": ws_state,
+                "current_step": current_step,
+                "pending_confirmation": pending_conf,
+            }).decode())
+        except Exception:
+            pass
+
         try:
             while True:
                 raw = await websocket.receive_text()
@@ -417,9 +495,13 @@ def crear_servidor(
                     old = _session_tasks.get(sid)
                     if old and not old.done():
                         await agente.cancel(sid)
+                    ws_initial = None
+                    if session_store is not None and (old is None or old.done()):
+                        ws_initial = await session_store.load(sid)
                     _session_queues[sid] = asyncio.Queue()
                     task = asyncio.create_task(
-                        _run_agent_task(agente, manager, sid, content)
+                        _run_agent_task(agente, manager, sid, content,
+                                        session_store=session_store, initial_state=ws_initial)
                     )
                     _session_tasks[sid] = task
 
