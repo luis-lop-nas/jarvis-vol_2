@@ -56,8 +56,8 @@ class Settings(BaseSettings):
     router_fallback_enabled: bool = Field(default=True)
 
     # --- Puertos ---
-    api_port: int = Field(default=8080, ge=1, le=65535)
-    websocket_port: int = Field(default=8081, ge=1, le=65535)
+    api_port: int = Field(default=8765, ge=1, le=65535)
+    websocket_port: int = Field(default=8765, ge=1, le=65535)
     chromadb_port: int = Field(default=8000, ge=1, le=65535)
     n8n_port: int = Field(default=5678, ge=1, le=65535)
 

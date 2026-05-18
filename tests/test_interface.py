@@ -1,0 +1,349 @@
+"""Tests de la capa interface — API REST, SSE y WebSocket."""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from collections import deque
+from typing import AsyncGenerator
+from unittest.mock import AsyncMock, MagicMock
+
+import httpx
+import orjson
+import pytest
+from starlette.testclient import TestClient
+
+from core.agent import ActualizacionAgente
+from interface.api import crear_servidor, _session_queues, _session_history, _session_tasks, _rate_state
+from interface.api_models import AgentUpdate
+from interface.websocket import ConnectionManager
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def make_agente(updates: list[ActualizacionAgente] | None = None) -> MagicMock:
+    """Agente mock con secuencia de updates predefinida."""
+    _updates = updates or [
+        ActualizacionAgente(tipo="pensando", mensaje="Analizando…", progreso=0.1),
+        ActualizacionAgente(tipo="actuando", mensaje="Ejecutando", progreso=0.5),
+        ActualizacionAgente(tipo="listo", mensaje="Completado.", progreso=1.0),
+    ]
+
+    agente = MagicMock()
+
+    async def _run(
+        tarea: str, session_id: str = ""
+    ) -> AsyncGenerator[ActualizacionAgente, None]:
+        for u in _updates:
+            yield u
+
+    agente.run = _run
+    agente.resume = AsyncMock(return_value=True)
+    agente.cancel = AsyncMock(return_value=True)
+    return agente
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _limpiar_estado():
+    """Borra el estado de módulo entre tests para evitar interferencias."""
+    _session_queues.clear()
+    _session_history.clear()
+    _session_tasks.clear()
+    _rate_state.clear()
+    yield
+    _session_queues.clear()
+    _session_history.clear()
+    _session_tasks.clear()
+    _rate_state.clear()
+
+
+@pytest.fixture
+def agente():
+    return make_agente()
+
+
+@pytest.fixture
+def manager():
+    return ConnectionManager()
+
+
+@pytest.fixture
+def app(agente, manager):
+    return crear_servidor(agente, manager)
+
+
+@pytest.fixture
+async def client(app):
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as c:
+        yield c
+
+
+# ---------------------------------------------------------------------------
+# POST /chat
+# ---------------------------------------------------------------------------
+
+
+async def test_chat_endpoint_devuelve_session_id(client):
+    r = await client.post("/chat", json={"message": "hola"})
+    assert r.status_code == 200
+    data = r.json()
+    assert "session_id" in data
+    assert data["status"] == "started"
+
+
+async def test_chat_respeta_session_id_enviado(client):
+    r = await client.post(
+        "/chat", json={"message": "prueba", "session_id": "mi-sesion"}
+    )
+    assert r.status_code == 200
+    assert r.json()["session_id"] == "mi-sesion"
+
+
+async def test_chat_crea_queue_para_sse(client):
+    await client.post("/chat", json={"message": "tarea", "session_id": "q-test"})
+    assert "q-test" in _session_queues
+
+
+async def test_chat_cancela_tarea_previa(manager):
+    """Si hay una tarea activa al llegar una nueva, se cancela la anterior."""
+    bloqueado = asyncio.Event()
+
+    async def _run_infinito(tarea: str, session_id: str = ""):
+        # Bloquea hasta que el test lo libere — simula tarea larga
+        await bloqueado.wait()
+        yield ActualizacionAgente(tipo="listo", mensaje="OK", progreso=1.0)
+
+    agente = make_agente()
+    agente.run = _run_infinito
+
+    app = crear_servidor(agente, manager)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        # Primera petición: tarea queda bloqueada (activa)
+        await c.post("/chat", json={"message": "primera", "session_id": "cancel-prev"})
+        await asyncio.sleep(0.02)  # deja que la tarea arranque
+        # Segunda petición: debe cancelar la primera
+        await c.post("/chat", json={"message": "segunda", "session_id": "cancel-prev"})
+
+    bloqueado.set()
+    agente.cancel.assert_awaited_with("cancel-prev")
+
+
+# ---------------------------------------------------------------------------
+# GET /stream/{session_id}
+# ---------------------------------------------------------------------------
+
+
+async def test_stream_404_sesion_desconocida(client):
+    r = await client.get("/stream/no-existe")
+    assert r.status_code == 404
+
+
+async def test_stream_devuelve_event_source(client):
+    await client.post("/chat", json={"message": "x", "session_id": "sse-ok"})
+    await asyncio.sleep(0.05)
+    # Solo verificamos que el endpoint no falla al conectar
+    async with client.stream("GET", "/stream/sse-ok") as resp:
+        assert resp.status_code == 200
+
+
+async def test_stream_recibe_updates(app):
+    """Los updates del agente llegan al consumidor SSE."""
+    manager = ConnectionManager()
+    agente = make_agente([
+        ActualizacionAgente(tipo="listo", mensaje="Hecho.", progreso=1.0),
+    ])
+    app2 = crear_servidor(agente, manager)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app2), base_url="http://test"
+    ) as c:
+        await c.post("/chat", json={"message": "tarea", "session_id": "sse-data"})
+        # Esperar a que la tarea corra
+        await asyncio.sleep(0.1)
+
+        recibidos: list[dict] = []
+        async with c.stream("GET", "/stream/sse-data") as resp:
+            async for line in resp.aiter_lines():
+                if line.startswith("data:"):
+                    payload = orjson.loads(line[len("data:"):].strip())
+                    recibidos.append(payload)
+                    if payload.get("type") in ("done", "error", "ping"):
+                        break
+
+    assert any(u.get("type") == "done" for u in recibidos)
+
+
+# ---------------------------------------------------------------------------
+# POST /confirm/{session_id}
+# ---------------------------------------------------------------------------
+
+
+async def test_confirm_llama_resume_con_si(agente, client):
+    await client.post("/chat", json={"message": "borrar", "session_id": "conf-ok"})
+    r = await client.post(
+        "/confirm/conf-ok", json={"action_id": "paso_1", "confirmed": True}
+    )
+    assert r.status_code == 200
+    agente.resume.assert_awaited_with("conf-ok", "si")
+
+
+async def test_confirm_llama_resume_con_no(agente, client):
+    await client.post("/chat", json={"message": "mover", "session_id": "conf-no"})
+    r = await client.post(
+        "/confirm/conf-no", json={"action_id": "paso_1", "confirmed": False}
+    )
+    assert r.status_code == 200
+    agente.resume.assert_awaited_with("conf-no", "no")
+
+
+async def test_confirm_404_cuando_resume_falla(manager):
+    agente = make_agente()
+    agente.resume = AsyncMock(return_value=False)
+    app2 = crear_servidor(agente, manager)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app2), base_url="http://test"
+    ) as c:
+        await c.post("/chat", json={"message": "test", "session_id": "conf-fail"})
+        r = await c.post(
+            "/confirm/conf-fail", json={"action_id": "x", "confirmed": True}
+        )
+    assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# POST /cancel/{session_id}
+# ---------------------------------------------------------------------------
+
+
+async def test_cancel_llama_cancel_en_agente(agente, client):
+    await client.post("/chat", json={"message": "tarea", "session_id": "can-ok"})
+    r = await client.post("/cancel/can-ok")
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
+    agente.cancel.assert_awaited_with("can-ok")
+
+
+async def test_cancel_not_found_cuando_cancel_falla(manager):
+    agente = make_agente()
+    agente.cancel = AsyncMock(return_value=False)
+    app2 = crear_servidor(agente, manager)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app2), base_url="http://test"
+    ) as c:
+        r = await c.post("/cancel/inexistente")
+    assert r.status_code == 200
+    assert r.json()["status"] == "not_found"
+
+
+# ---------------------------------------------------------------------------
+# GET /status
+# ---------------------------------------------------------------------------
+
+
+async def test_status_devuelve_api_running(client):
+    r = await client.get("/status")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["api_running"] is True
+    assert "ram_available_gb" in data
+    assert "available_models" in data
+
+
+# ---------------------------------------------------------------------------
+# GET /history/{session_id}
+# ---------------------------------------------------------------------------
+
+
+async def test_history_acumula_updates(app):
+    manager = ConnectionManager()
+    agente = make_agente([
+        ActualizacionAgente(tipo="listo", mensaje="OK", progreso=1.0),
+    ])
+    app2 = crear_servidor(agente, manager)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app2), base_url="http://test"
+    ) as c:
+        await c.post("/chat", json={"message": "x", "session_id": "hist-ok"})
+        await asyncio.sleep(0.15)
+        r = await c.get("/history/hist-ok")
+
+    assert r.status_code == 200
+    data = r.json()
+    assert isinstance(data, list)
+    assert len(data) >= 1
+
+
+async def test_history_sesion_vacia_devuelve_lista_vacia(client):
+    r = await client.get("/history/sin-sesion")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
+
+
+async def test_rate_limit_429_al_superar_10_por_segundo(manager):
+    agente = make_agente([])
+    app2 = crear_servidor(agente, manager)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app2), base_url="http://test"
+    ) as c:
+        statuses = []
+        for _ in range(13):
+            r = await c.post("/chat", json={"message": "x", "session_id": "rate-sid"})
+            statuses.append(r.status_code)
+
+    assert 429 in statuses, f"Esperaba 429, obtenidos: {set(statuses)}"
+
+
+# ---------------------------------------------------------------------------
+# WebSocket /ws
+# ---------------------------------------------------------------------------
+
+
+def test_websocket_ping_pong(app):
+    with TestClient(app) as tc:
+        with tc.websocket_connect("/ws?session_id=ws-ping") as ws:
+            ws.send_text(orjson.dumps({"type": "ping"}).decode())
+            data = orjson.loads(ws.receive_text())
+            assert data["type"] == "pong"
+
+
+def test_websocket_json_invalido_devuelve_error(app):
+    with TestClient(app) as tc:
+        with tc.websocket_connect("/ws?session_id=ws-json") as ws:
+            ws.send_text("esto no es json{{{")
+            data = orjson.loads(ws.receive_text())
+            assert data["type"] == "error"
+
+
+def test_websocket_reconexion_recibe_buffer(manager):
+    """Al reconectar, el cliente recibe los mensajes del buffer pendiente."""
+    manager._buffers["buf-sid"] = deque(
+        [{"type": "done", "message": "Completado.", "progress": 1.0, "state": "silent"}],
+        maxlen=50,
+    )
+    agente = make_agente()
+    app2 = crear_servidor(agente, manager)
+
+    with TestClient(app2) as tc:
+        with tc.websocket_connect("/ws?session_id=buf-sid") as ws:
+            data = orjson.loads(ws.receive_text())
+            assert data["message"] == "Completado."

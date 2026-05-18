@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.jarvis.overlay</string>
+	<key>CFBundleName</key>
+	<string>JARVIS</string>
+	<key>CFBundleDisplayName</key>
+	<string>JARVIS</string>
+	<key>CFBundleVersion</key>
+	<string>8.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>8.0.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleExecutable</key>
+	<string>JARVIS</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<!-- Sin icono en Dock — solo menu bar -->
+	<key>LSUIElement</key>
+	<true/>
+	<!-- Permisos de privacidad -->
+	<key>NSAccessibilityUsageDescription</key>
+	<string>JARVIS necesita acceso a la API de Accesibilidad para detectar la app activa y controlar elementos de la interfaz.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>JARVIS necesita acceso a la grabación de pantalla para capturar contexto visual y mostrarlo en el overlay.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>JARVIS usa AppleEvents para interactuar con otras aplicaciones.</string>
+	<!-- Seguridad de red: comunicación local con el agente -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

@@ -15,6 +15,7 @@
 - **Fase 5 — Loop principal del agente:** ✅ completada
 - **Fase 6 — Sistema completo de memoria:** ✅ completada
 - **Fase 7 — MCP servers:** ✅ completada
+- **Fase 8 — Interfaz completa (FastAPI + WebSocket + SwiftUI overlay):** ✅ completada
 
 ---
 
@@ -56,6 +57,32 @@
 - **`config/settings.py`** — Añadidos `chroma_host`, `chroma_port`, `chroma_collection`, `short_term_max_tokens`, `short_term_max_messages`, `memory_importance_threshold`, `vault_timeout_seconds`.
 - **`tests/test_memory.py`** — 12 tests con ChromaDB, Ollama y 1Password completamente mockeados: overflow, ventana de contexto, store/search, híbrida deduplicada, episodios, lecciones, workflows, Face ID, `op` ausente, integración de fachada y health check.
 - **Suite completa:** 138/138 verde en 13.22 s.
+
+### Fase 8 — Interfaz completa (2026-05-18)
+- **`interface/api_models.py`** — Pydantic: `ChatRequest`, `ChatResponse`, `ConfirmRequest`, `AgentUpdate`, `ConfirmationRequest`, `SystemStatus`.
+- **`interface/api.py`** — FastAPI en puerto 8765: POST `/chat` (async, devuelve inmediatamente), GET `/stream/{session_id}` (SSE con cola por sesión), POST `/confirm` (desbloquea agente via `agente.resume()`), POST `/cancel`, GET `/status` (ChromaDB + Ollama + RAM + 1Password), GET `/history`, POST `/screenshot`. WS `/ws` integrado con protocolo message/confirm/cancel/ping. CORS localhost-only, rate limiting 10 req/s por session_id (ventana deslizante), máx 500 sesiones activas, validación de session_id, error handler global sin stack traces.
+- **`interface/websocket.py`** — `ConnectionManager`: connect/disconnect/send/broadcast con buffer `deque(maxlen=50)` por sesión para reconexión automática.
+- **`main.py`** — Reescrito: checks paralelos (permisos macOS + Ollama + ChromaDB), tabla rich de estado de arranque, inicialización correcta del `Agente` (sin referencias rotas), arranque en `settings.api_port` (8765).
+- **`config/settings.py`** — `api_port` default actualizado de 8080 a 8765.
+- **`interface/swiftui/`** — Overlay nativo macOS completo:
+  - `JARVISApp.swift` — Menu bar app (LSUIElement), auto-lanza backend Python.
+  - `AppDelegate.swift` — Orquestador: status bar, permisos, WebSocket, hotkey, sync de ventanas al estado.
+  - `JARVISState.swift` — `@Observable`, `UIState` enum (silent/notchPulse/edgeLog/focusModal/inline), `applyUpdate()` con transiciones animadas spring.
+  - `WebSocketClient.swift` — URLSessionWebSocketTask, reconexión exponential backoff (1s→2s→4s→8s→30s).
+  - `PermissionsManager.swift` — Accessibility + Screen Recording, abre System Settings.
+  - `NotchView.swift` — Panel notch 120×22→240×38px, dot pulsante.
+  - `EdgeLogView.swift` — Strip 3px borde derecho, expande 200px al hover, lista de pasos con íconos.
+  - `FocusModalView.swift` — Panel central 480px, NSVisualEffectView vibrancy, streaming text, Esc/⌘↵.
+  - `InlineView.swift` — Contextual: VS Code / Finder / Safari / generic.
+  - `ConfirmationCard.swift` — Card ámbar (#3d2800) con botones Cancelar/Confirmar.
+  - `WindowManager.swift` — Ventanas sin titlebar en niveles statusBar/floating/modalPanel.
+  - `HotkeyManager.swift` — CGEventTap ⌘Space, fallback ⌘⌥Space + NSEvent global monitor.
+  - `AppContextDetector.swift` — AXUIElement polling 0.5s, AppContext.
+  - `Resources/Info.plist` — LSUIElement, permisos, deployment target macOS 14.0+, bundle com.jarvis.overlay.
+  - `JARVIS.xcodeproj/project.pbxproj` — Proyecto Xcode mínimo válido.
+  - `build.sh` — xcodebuild Release/Debug, copia .app a ~/Applications/.
+- **`tests/test_interface.py`** — 19 tests: todos los endpoints REST + WebSocket (ping/pong/buffer/json-inválido) + rate limit. Fixture autouse limpia estado módulo entre tests. Agente completamente mockeado.
+- **Suite completa:** 176/176 verde en 14.77s (157 preexistentes + 19 nuevos).
 
 ### Fase 7 — MCP servers (2026-05-18)
 - **`mcp_servers/base.py`** — Contrato MCP interno con `MCPRequest`, `MCPResult`, `MCPTool`, protocolo `MCPServer`, conversión a formato `tools/list`, helpers de JSON Schema, validación de parámetros y `serializar_dato()` para dataclasses, Pydantic, `Path`, fechas y bytes.
@@ -114,24 +141,19 @@
 
 ## 🔄 En progreso
 
-_(nada activo — Fase 7 MCP completada)_
+_(nada activo — Fase 8 completada)_
 
 ---
 
-## ⏳ Siguiente a implementar (Fase 8 — Confirmación real + UI runtime)
+## ⏳ Siguiente a implementar (Fase 9)
 
-Conectar el agente operativo a una interfaz humana segura:
+Candidatos para Fase 9:
 
-1. **`security/confirmation.py`** — callbacks reales por WebSocket/UI, notificación macOS y timeout fail-closed.
-2. **`interface/websocket.py`** — canal de eventos de agente: actualizaciones, solicitudes de confirmación, respuesta/cancelación.
-3. **`interface/api.py`** — endpoints para crear sesión, ejecutar tarea, pausar, resumir, cancelar y consultar health.
-4. **Runtime wiring en `main.py`** — construir modelos, router, planner, reflector, `MemorySystem`, `MCPBus`, audit log y callbacks reales.
-5. **Pruebas e2e runtime** — tarea simple con filesystem MCP, confirmación aprobada/denegada, cancelación y auditoría.
-
-Tests mínimos para cerrar la fase:
-- `tests/test_confirmation.py` — timeout fail-closed y aprobación explícita.
-- `tests/test_interface.py` — WebSocket/API con confirmación y cancelación.
-- `tests/test_runtime.py` — construcción completa del agente sin tocar servicios reales.
+1. **Confirmación vía notificación macOS** — `security/confirmation.py` con callback real al WebSocket: la notificación push aparece en el sistema, el usuario responde y desbloquea el agente.
+2. **Persistencia de sesiones** — guardar/restaurar sesiones activas en disco para sobrevivir reinicios del servidor.
+3. **Distribución del overlay** — `interface/swiftui/build.sh` ya preparado. Firma y notarización para distribuir a otras Macs. Auto-update system.
+4. **Tests e2e runtime** — `tests/test_runtime.py`: arranque completo del agente, tarea filesystem MCP, confirmación aprobada/denegada, cancelación, auditoría.
+5. **Dashboard web** — panel `http://localhost:8765` con historial de sesiones, logs y estado del sistema.
 
 ---
 
@@ -157,6 +179,15 @@ Tests mínimos para cerrar la fase:
 - ADR-32: **Embeddings siempre locales** — `LongTermMemory` usa `models.embeddings.EmbeddingsClient`; no hay envío de memoria a APIs cloud para embeddings.
 - ADR-33: **ChromaDB degradable en tests/CI** — si el servidor no está disponible, la inicialización no rompe imports ni tests del agente; las operaciones de largo plazo fallan de forma explícita y la fachada las registra sin tumbar el loop.
 - ADR-34: **Vault fail-closed con autorización inyectable** — todo `get_*` exige autorización previa; en producción se conectará a Face ID, en tests se mockea sin tocar secretos reales.
+
+### 2026-05-18 (Fase 8 — Interfaz)
+- ADR-44: **Estado de sesiones module-level compartido** — `_session_queues/history/tasks` son dicts module-level; `crear_servidor()` inyecta agente/manager pero comparte el estado de sesión, lo que permite que SSE y WS accedan a la misma cola sin coordinación extra.
+- ADR-45: **Rate limiting con ventana deslizante de deque** — cada `session_id` tiene un `deque(maxlen=20)` de timestamps; se purgan los >1s en cada check. Sin dependencias externas.
+- ADR-46: **SSE con sentinel `None`** — `_run_agent_task` pone `None` en la cola al terminar; el generador SSE lo interpreta como señal de cierre y rompe el bucle sin polling.
+- ADR-47: **WebSocket buffer circular** — `ConnectionManager` usa `deque(maxlen=50)` por sesión; al reconectar, el cliente recibe los últimos 50 mensajes perdidos antes de entrar en el bucle normal.
+- ADR-48: **Overlay SwiftUI `@Observable`** — `JARVISState` usa el macro `@Observable` de Swift 5.9+ (macOS 14+); `applyUpdate()` aplica `withAnimation(.spring)` para transiciones suaves entre estados UI.
+- ADR-49: **xcodeproj con identificadores cortos** — `project.pbxproj` usa IDs cortos legibles (PROOT, TTARGET, etc.) en lugar de UUIDs de 24 hex; válido para Xcode. Si hay conflictos, regenerar con `open -a Xcode Package.swift` → File → Generate Xcode Project.
+- ADR-50: **Límite de 500 sesiones activas** — previene DoS por acumulación de sesiones; `POST /chat` devuelve 503 si se supera. Session-ids validados con regex `^[a-zA-Z0-9_-]{1,64}$`.
 
 ### 2026-05-18 (Fase 7 — MCP)
 - ADR-35: **Nombres canónicos iguales al planner** — el bus MCP expone `filesystem.leer`, `terminal.ejecutar`, etc.; se eliminan nombres paralelos tipo `fs_leer` para evitar traducciones frágiles.

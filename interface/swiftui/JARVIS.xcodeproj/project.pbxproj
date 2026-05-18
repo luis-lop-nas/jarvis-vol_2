@@ -1,0 +1,336 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A101 /* JARVISApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F101 /* JARVISApp.swift */; };
+		A102 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F102 /* AppDelegate.swift */; };
+		A103 /* WebSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F103 /* WebSocketClient.swift */; };
+		A104 /* JARVISState.swift in Sources */ = {isa = PBXBuildFile; fileRef = F104 /* JARVISState.swift */; };
+		A105 /* PermissionsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F105 /* PermissionsManager.swift */; };
+		A106 /* NotchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F106 /* NotchView.swift */; };
+		A107 /* EdgeLogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F107 /* EdgeLogView.swift */; };
+		A108 /* FocusModalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F108 /* FocusModalView.swift */; };
+		A109 /* InlineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F109 /* InlineView.swift */; };
+		A110 /* ConfirmationCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = F110 /* ConfirmationCard.swift */; };
+		A111 /* WindowManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F111 /* WindowManager.swift */; };
+		A112 /* HotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F112 /* HotkeyManager.swift */; };
+		A113 /* AppContextDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = F113 /* AppContextDetector.swift */; };
+		A114 /* Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = F114 /* Info.plist */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		F101 /* JARVISApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JARVISApp.swift; sourceTree = "<group>"; };
+		F102 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		F103 /* WebSocketClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketClient.swift; sourceTree = "<group>"; };
+		F104 /* JARVISState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JARVISState.swift; sourceTree = "<group>"; };
+		F105 /* PermissionsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionsManager.swift; sourceTree = "<group>"; };
+		F106 /* NotchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchView.swift; sourceTree = "<group>"; };
+		F107 /* EdgeLogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EdgeLogView.swift; sourceTree = "<group>"; };
+		F108 /* FocusModalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusModalView.swift; sourceTree = "<group>"; };
+		F109 /* InlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineView.swift; sourceTree = "<group>"; };
+		F110 /* ConfirmationCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfirmationCard.swift; sourceTree = "<group>"; };
+		F111 /* WindowManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowManager.swift; sourceTree = "<group>"; };
+		F112 /* HotkeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyManager.swift; sourceTree = "<group>"; };
+		F113 /* AppContextDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppContextDetector.swift; sourceTree = "<group>"; };
+		F114 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		FPROD /* JARVIS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = JARVIS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		BFRAME /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		GMAIN /* JARVIS */ = {
+			isa = PBXGroup;
+			children = (
+				GAPP /* App */,
+				GCORE /* Core */,
+				GVIEWS /* Views */,
+				GUTIL /* Utilities */,
+				GRES /* Resources */,
+				GPROD /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		GPROD /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				FPROD /* JARVIS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		GAPP /* App */ = {
+			isa = PBXGroup;
+			children = (
+				F101 /* JARVISApp.swift */,
+				F102 /* AppDelegate.swift */,
+			);
+			name = App;
+			path = Sources/App;
+			sourceTree = "<group>";
+		};
+		GCORE /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				F103 /* WebSocketClient.swift */,
+				F104 /* JARVISState.swift */,
+				F105 /* PermissionsManager.swift */,
+			);
+			name = Core;
+			path = Sources/Core;
+			sourceTree = "<group>";
+		};
+		GVIEWS /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				F106 /* NotchView.swift */,
+				F107 /* EdgeLogView.swift */,
+				F108 /* FocusModalView.swift */,
+				F109 /* InlineView.swift */,
+				F110 /* ConfirmationCard.swift */,
+			);
+			name = Views;
+			path = Sources/Views;
+			sourceTree = "<group>";
+		};
+		GUTIL /* Utilities */ = {
+			isa = PBXGroup;
+			children = (
+				F111 /* WindowManager.swift */,
+				F112 /* HotkeyManager.swift */,
+				F113 /* AppContextDetector.swift */,
+			);
+			name = Utilities;
+			path = Sources/Utilities;
+			sourceTree = "<group>";
+		};
+		GRES /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				F114 /* Info.plist */,
+			);
+			name = Resources;
+			path = Resources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		TTARGET /* JARVIS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CLLIST_T /* Build configuration list for PBXNativeTarget "JARVIS" */;
+			buildPhases = (
+				BSRC /* Sources */,
+				BFRAME /* Frameworks */,
+				BRES /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = JARVIS;
+			productName = JARVIS;
+			productReference = FPROD /* JARVIS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		PROOT /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					TTARGET = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = CLLIST_P /* Build configuration list for PBXProject "JARVIS" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = GMAIN;
+			productRefGroup = GPROD /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				TTARGET /* JARVIS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		BRES /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A114 /* Info.plist in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		BSRC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A101 /* JARVISApp.swift in Sources */,
+				A102 /* AppDelegate.swift in Sources */,
+				A103 /* WebSocketClient.swift in Sources */,
+				A104 /* JARVISState.swift in Sources */,
+				A105 /* PermissionsManager.swift in Sources */,
+				A106 /* NotchView.swift in Sources */,
+				A107 /* EdgeLogView.swift in Sources */,
+				A108 /* FocusModalView.swift in Sources */,
+				A109 /* InlineView.swift in Sources */,
+				A110 /* ConfirmationCard.swift in Sources */,
+				A111 /* WindowManager.swift in Sources */,
+				A112 /* HotkeyManager.swift in Sources */,
+				A113 /* AppContextDetector.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		CDEBUG_P /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		CRELEASE_P /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		CDEBUG_T /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 8.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.jarvis.overlay";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.9;
+			};
+			name = Debug;
+		};
+		CRELEASE_T /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 8.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.jarvis.overlay";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.9;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		CLLIST_P /* Build configuration list for PBXProject "JARVIS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CDEBUG_P /* Debug */,
+				CRELEASE_P /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CLLIST_T /* Build configuration list for PBXNativeTarget "JARVIS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CDEBUG_T /* Debug */,
+				CRELEASE_T /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+	};
+	rootObject = PROOT /* Project object */;
+}
