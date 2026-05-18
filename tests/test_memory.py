@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import math
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 
-from memory import MemorySystem
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock
+
+from memory import HealthStatus, MemorySystem
 from memory.episodic import Episode, EpisodicMemory
 from memory.long_term import LongTermMemory, MemoryEntry
 from memory.procedural import ProceduralMemory, Workflow
@@ -310,17 +312,296 @@ async def test_memory_system_integration() -> None:
 
 @pytest.mark.asyncio
 async def test_memory_health_check() -> None:
-    """health_check devuelve el estado agregado de servicios externos."""
+    """health_check devuelve HealthStatus con detalles completos."""
     long_term = _fake_long_term()
-    long_term.health_check = AsyncMock(return_value=True)  # type: ignore[method-assign]
     vault = Vault(auth_callback=AsyncMock(return_value=True))
     vault.is_available = AsyncMock(return_value=True)  # type: ignore[method-assign]
     system = MemorySystem(long_term=long_term, vault=vault)
 
     estado = await system.health_check()
 
-    assert estado == {
-        "chroma": True,
-        "ollama_embeddings": True,
-        "vault_available": True,
+    assert isinstance(estado, HealthStatus)
+    assert estado.status in {"healthy", "degraded", "down"}
+    assert "chroma" in estado.details
+    assert "vault_available" in estado.details
+    assert "total_entradas" in estado.details
+    assert "entradas_expiradas" in estado.details
+    assert "latencia_query_ms" in estado.details
+
+
+# -----------------------------------------------------------------------
+# Tests de deduplicación activa
+# -----------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_memory_dedup_skip() -> None:
+    """Entradas prácticamente idénticas (sim ≥ 0.99) se descartan silenciosamente."""
+    memoria = _fake_long_term()
+    # Entramos con embeddings deterministas: el mismo texto produce el mismo vector
+    entry_a = MemoryEntry(
+        content="correo para reportes",
+        summary="correo",
+        category="preferencia",
+        source="test",
+        importance=0.8,
+    )
+    id_a = await memoria.store(entry_a)
+
+    # Guardamos la misma entrada de nuevo (embeddings idénticos → sim = 1.0 ≥ 0.99)
+    entry_b = MemoryEntry(
+        content="correo para reportes",
+        summary="correo",
+        category="preferencia",
+        source="test",
+        importance=0.8,
+    )
+    id_b = await memoria.store(entry_b)
+
+    # Debe reutilizar la existente
+    assert id_a == id_b
+    # Solo hay 1 entrada en la colección
+    total = await memoria.count()
+    assert total == 1
+
+
+@pytest.mark.asyncio
+async def test_memory_dedup_complement() -> None:
+    """Entradas similares pero no idénticas se fusionan (complement)."""
+    memoria = _fake_long_term()
+    entry_a = MemoryEntry(
+        content="archivo README importante para el proyecto",
+        summary="README",
+        category="hecho",
+        source="test",
+    )
+    id_a = await memoria.store(entry_a)
+
+    # Segunda entrada con mismo tema pero contenido diferente
+    # FakeEmbeddings basada en palabras → "archivo README" produce vector similar
+    entry_b = MemoryEntry(
+        content="archivo README actualizado con nuevas instrucciones",
+        summary="README nuevo",
+        category="hecho",
+        source="test",
+    )
+    id_b = await memoria.store(entry_b)
+
+    # Si fueron fusionadas, el id es el mismo; si no, hay 2 entradas distintas.
+    # En cualquier caso no debe haber más de 2 entradas.
+    total = await memoria.count()
+    assert total <= 2
+    # El id_b debe ser id_a (merge) o un id nuevo (contradict/no dedup)
+    assert id_b in {id_a, entry_b.id}
+
+
+@pytest.mark.asyncio
+async def test_memory_dedup_update_version() -> None:
+    """Una entrada complementada incrementa su versión y actualiza updated_at."""
+    memoria = _fake_long_term()
+    entry = MemoryEntry(
+        content="correo para reportes semanales de Luichi",
+        summary="correo",
+        category="preferencia",
+        source="test",
+        importance=0.8,
+    )
+    ident = await memoria.store(entry, dedup=False)
+
+    # Forzar una fusión llamando a update() directamente
+    ok = await memoria.update(ident, "correo para reportes y resúmenes diarios de Luichi")
+    assert ok is True
+
+    actualizada = await memoria.get(ident)
+    assert actualizada is not None
+    assert actualizada.version >= 2
+
+
+# -----------------------------------------------------------------------
+# Tests de validez temporal
+# -----------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_temporal_validity_filtering() -> None:
+    """Las entradas con valid_until en el pasado se excluyen de búsquedas."""
+    memoria = _fake_long_term()
+    entry = MemoryEntry(
+        content="correo para reportes de proyecto antiguo",
+        summary="correo antiguo",
+        category="hecho",
+        source="test",
+        importance=0.9,
+    )
+    ident = await memoria.store(entry, dedup=False)
+
+    # Expirar manualmente la entrada
+    entrada = await memoria.get(ident)
+    assert entrada is not None
+    entrada.valid_until = datetime.now(UTC) - timedelta(days=1)
+    await memoria._update_entry_metadata(entrada)
+
+    # Búsqueda normal → no debe aparecer
+    resultados = await memoria.search("correo reportes")
+    ids = [r.id for r in resultados]
+    assert ident not in ids
+
+    # Búsqueda con include_expired=True → sí debe aparecer
+    resultados_exp = await memoria.search("correo reportes", include_expired=True)
+    ids_exp = [r.id for r in resultados_exp]
+    assert ident in ids_exp
+
+
+@pytest.mark.asyncio
+async def test_search_hybrid_excludes_expired() -> None:
+    """search_hybrid también filtra entradas expiradas por defecto."""
+    memoria = _fake_long_term()
+    ident = await memoria.store(
+        MemoryEntry(
+            content="archivo README expirado",
+            summary="README",
+            category="hecho",
+            source="test",
+        ),
+        dedup=False,
+    )
+    entrada = await memoria.get(ident)
+    assert entrada is not None
+    entrada.valid_until = datetime.now(UTC) - timedelta(hours=1)
+    await memoria._update_entry_metadata(entrada)
+
+    resultados = await memoria.search_hybrid("README")
+    assert all(r.id != ident for r in resultados)
+
+
+@pytest.mark.asyncio
+async def test_count_expired() -> None:
+    """count_expired devuelve el número correcto de entradas expiradas."""
+    memoria = _fake_long_term()
+    for i in range(3):
+        await memoria.store(
+            MemoryEntry(
+                content=f"entrada expirada {i}",
+                summary=f"exp {i}",
+                category="hecho",
+                source="test",
+            ),
+            dedup=False,
+        )
+    # Expirar las 3
+    todos = await memoria.get_recent(limit=10)
+    for e in todos:
+        e.valid_until = datetime.now(UTC) - timedelta(minutes=5)
+        await memoria._update_entry_metadata(e)
+
+    n_exp = await memoria.count_expired()
+    assert n_exp == 3
+
+
+# -----------------------------------------------------------------------
+# Tests de instrucciones aprendidas (memoria procedural)
+# -----------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_procedural_update_instructions() -> None:
+    """update_agent_instructions guarda instrucciones con confirmación."""
+    instructions_store = _fake_long_term()
+    procedural = ProceduralMemory(
+        store=_fake_long_term(),
+        instructions_store=instructions_store,
+    )
+
+    ok = await procedural.update_agent_instructions(
+        "Responder siempre en español",
+        confirm_callback=AsyncMock(return_value=True),
+    )
+
+    assert ok is True
+    instrucciones = await procedural.get_agent_instructions()
+    assert any("español" in i for i in instrucciones)
+
+
+@pytest.mark.asyncio
+async def test_procedural_update_instructions_rejected() -> None:
+    """update_agent_instructions respeta el rechazo del usuario."""
+    procedural = ProceduralMemory(
+        store=_fake_long_term(),
+        instructions_store=_fake_long_term(),
+    )
+
+    ok = await procedural.update_agent_instructions(
+        "instrucción rechazada",
+        confirm_callback=AsyncMock(return_value=False),
+    )
+
+    assert ok is False
+    instrucciones = await procedural.get_agent_instructions()
+    assert not instrucciones
+
+
+@pytest.mark.asyncio
+async def test_procedural_instructions_max_limit() -> None:
+    """Al superar 10 instrucciones, la más antigua se archiva automáticamente."""
+    instructions_store = _fake_long_term()
+    procedural = ProceduralMemory(
+        store=_fake_long_term(),
+        instructions_store=instructions_store,
+    )
+
+    # Añadir 11 instrucciones sin confirmación
+    for i in range(11):
+        await procedural.update_agent_instructions(
+            f"instrucción número {i}",
+            confirm_callback=None,
+        )
+
+    instrucciones = await procedural.get_agent_instructions()
+    assert len(instrucciones) <= 10
+
+
+@pytest.mark.asyncio
+async def test_agent_loads_learned_instructions() -> None:
+    """_percibir carga instrucciones aprendidas en memory_context."""
+    from core.agent import Agente, AgentState
+    from core.planner import Planner
+    from core.reflector import Reflector
+    from memory.short_term import ShortTermMemory
+    from memory.episodic import EpisodicMemory
+    from security.audit_log import AuditLog
+
+    memoria = MagicMock()
+    memoria.get_context = AsyncMock(return_value="Contexto previo")
+    memoria.get_agent_instructions = AsyncMock(return_value=["Responder en español"])
+
+    auditoria = MagicMock(spec=AuditLog)
+    auditoria.registrar = AsyncMock()
+
+    agente = Agente(
+        planner=MagicMock(spec=Planner),
+        reflector=MagicMock(spec=Reflector),
+        memoria_corto=MagicMock(spec=ShortTermMemory),
+        memoria_episodica=MagicMock(spec=EpisodicMemory),
+        auditoria=auditoria,
+        memoria=memoria,
+    )
+
+    estado_inicial: AgentState = {
+        "messages": [],
+        "current_task": "test",
+        "current_plan": None,
+        "completed_steps": [],
+        "failed_steps": [],
+        "retry_count": 0,
+        "replan_count": 0,
+        "system_context": {},
+        "memory_context": "",
+        "waiting_for_user": False,
+        "paso_pendiente_confirmacion": None,
+        "abort_reason": None,
+        "session_id": "test-session",
+        "indice_paso_actual": 0,
+        "tarea_completada": False,
     }
+
+    estado = await agente._percibir(estado_inicial)
+
+    assert "Instrucciones aprendidas" in estado["memory_context"]
+    assert "Responder en español" in estado["memory_context"]

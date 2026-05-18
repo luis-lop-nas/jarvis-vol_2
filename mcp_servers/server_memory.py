@@ -110,6 +110,7 @@ class ServidorMemoria:
                 episode = Episode(**dict(params["episode"]))
                 return {"id": await self._memory.record_episode(episode)}
             case "memory.health":
-                return await self._memory.health_check()
+                estado = await self._memory.health_check()
+                return estado.model_dump() if hasattr(estado, "model_dump") else dict(estado)
             case _:
                 raise ValueError(f"Herramienta memory desconocida: {tool_name}")

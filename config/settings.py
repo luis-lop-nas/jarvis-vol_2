@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     short_term_max_tokens: int = Field(default=8000, ge=1)
     short_term_max_messages: int = Field(default=100, ge=1)
     memory_importance_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
+    memory_dedup_threshold: float = Field(default=0.92, ge=0.0, le=1.0)
     vault_timeout_seconds: int = Field(default=30, ge=1)
 
     # --- Rutas ---

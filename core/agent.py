@@ -448,7 +448,18 @@ class Agente:
         except Exception as exc:
             log.debug("No se pudo preparar contexto de memoria: %s", exc)
             memoria_contexto = ""
-        return {**state, "system_context": contexto, "memory_context": memoria_contexto}
+
+        instrucciones_aprendidas = ""
+        try:
+            aprendidas = await self._memoria.get_agent_instructions()
+            if aprendidas:
+                items = "\n".join(f"- {i}" for i in aprendidas)
+                instrucciones_aprendidas = f"\nInstrucciones aprendidas:\n{items}"
+        except Exception as exc:
+            log.debug("Instrucciones aprendidas no disponibles: %s", exc)
+
+        contexto_completo = memoria_contexto + instrucciones_aprendidas
+        return {**state, "system_context": contexto, "memory_context": contexto_completo}
 
     async def _pensar(self, state: AgentState) -> AgentState:
         """Genera o valida el plan actual."""

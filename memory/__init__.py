@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+import time
+from collections.abc import Awaitable, Callable
+from typing import Any, Literal
+
+from pydantic import BaseModel
 
 from config import settings
 from memory.episodic import Episode, EpisodicMemory
@@ -22,11 +26,24 @@ __all__ = [
     "ProceduralMemory",
     "Vault",
     "MemorySystem",
+    "HealthStatus",
     "Episode",
     "Workflow",
     "MemoryEntry",
     "Message",
 ]
+
+
+class HealthStatus(BaseModel):
+    """Estado de salud detallado del sistema de memoria.
+
+    Ejemplo::
+        estado = await memory_system.health_check()
+        print(estado.status, estado.details["latencia_query_ms"])
+    """
+
+    status: Literal["healthy", "degraded", "down"]
+    details: dict[str, Any]
 
 
 class MemorySystem:
@@ -60,7 +77,11 @@ class MemorySystem:
         user_msg: str | Message,
         assistant_msg: str | Message,
     ) -> None:
-        """Guarda la interacción en corto plazo y, si es relevante, en largo plazo."""
+        """Guarda la interacción en corto plazo y, si es relevante, en largo plazo.
+
+        Ejemplo::
+            await memory.store_interaction("pregunta", "respuesta")
+        """
         usuario = self._to_message(user_msg, "user")
         asistente = self._to_message(assistant_msg, "assistant")
 
@@ -87,7 +108,11 @@ class MemorySystem:
                 log.warning("No se pudo persistir interacción en memoria: %s", exc)
 
     async def get_context(self, task: str, max_tokens: int) -> str:
-        """Construye el contexto completo que se inyectará en el prompt."""
+        """Construye el contexto completo que se inyectará en el prompt.
+
+        Ejemplo::
+            ctx = await memory.get_context("organiza archivos", max_tokens=2000)
+        """
         recientes = await self._short_term.get_context_window(max_tokens)
         conversacion = "\n".join(
             f"{m.role}: {m.content}" for m in recientes
@@ -114,7 +139,11 @@ class MemorySystem:
         return "\n".join(partes).strip()
 
     async def record_episode(self, episode: Episode) -> str:
-        """Registra un episodio y dispara el aprendizaje procedural."""
+        """Registra un episodio y dispara el aprendizaje procedural.
+
+        Ejemplo::
+            ident = await memory.record_episode(episodio)
+        """
         ident = await self._episodic.record(episode)
         try:
             await self._procedural.learn_from_episode(episode)
@@ -124,7 +153,11 @@ class MemorySystem:
         return ident
 
     async def find_workflow(self, task: str) -> Workflow | None:
-        """Busca un workflow pertinente antes de planificar."""
+        """Busca un workflow pertinente antes de planificar.
+
+        Ejemplo::
+            wf = await memory.find_workflow("organiza archivos")
+        """
         try:
             return await self._procedural.find_workflow(task)
         except Exception as exc:
@@ -133,6 +166,9 @@ class MemorySystem:
 
     async def store_memory(self, entry: MemoryEntry) -> str:
         """Guarda una entrada explícita en memoria de largo plazo.
+
+        Ejemplo::
+            ident = await memory.store_memory(entrada)
 
         Args:
             entry: Entrada Pydantic de memoria persistente.
@@ -145,6 +181,9 @@ class MemorySystem:
     async def search_memory(self, query: str, limit: int = 5) -> list[MemoryEntry]:
         """Busca en memoria de largo plazo con estrategia híbrida.
 
+        Ejemplo::
+            entradas = await memory.search_memory("correo reportes", limit=5)
+
         Args:
             query: Consulta del usuario o tarea actual.
             limit: Máximo de resultados.
@@ -155,31 +194,129 @@ class MemorySystem:
         return await self._long_term.search_hybrid(query, limit=limit)
 
     async def get_secret(self, service: str) -> str | None:
-        """Recupera un secreto de 1Password usando el servicio indicado."""
+        """Recupera un secreto de 1Password usando el servicio indicado.
+
+        Ejemplo::
+            clave = await memory.get_secret("Kimi")
+        """
         secret = await self._vault.get_api_key(service)
         if secret:
             return secret
         return await self._vault.get_password(service)
 
     async def clear_session(self) -> None:
-        """Limpia la memoria de corto plazo al finalizar una sesión."""
+        """Limpia la memoria de corto plazo al finalizar una sesión.
+
+        Ejemplo::
+            await memory.clear_session()
+        """
         await self._short_term.clear()
 
-    async def health_check(self) -> dict[str, Any]:
-        """Verifica la salud de todos los backends de memoria."""
-        chroma, vault = await asyncio.gather(
-            self._long_term.health_check(),
-            self._vault.is_available(),
-            return_exceptions=True,
+    async def get_agent_instructions(self) -> list[str]:
+        """Devuelve las instrucciones aprendidas activas del agente.
+
+        Ejemplo::
+            instrucciones = await memory.get_agent_instructions()
+
+        Returns:
+            Lista de instrucciones (máx. 10) ordenadas por recencia.
+        """
+        return await self._procedural.get_agent_instructions()
+
+    async def update_agent_instructions(
+        self,
+        feedback: str,
+        confirm_callback: Callable[[str], Awaitable[bool]] | None = None,
+    ) -> bool:
+        """Añade o actualiza una instrucción aprendida para el system prompt.
+
+        Ejemplo::
+            ok = await memory.update_agent_instructions("Responder siempre en español")
+
+        Args:
+            feedback: Texto de la instrucción aprendida.
+            confirm_callback: Función async de confirmación del usuario.
+
+        Returns:
+            ``True`` si la instrucción fue guardada.
+        """
+        return await self._procedural.update_agent_instructions(
+            feedback, confirm_callback=confirm_callback
         )
-        return {
-            "chroma": bool(chroma) if not isinstance(chroma, Exception) else False,
-            "ollama_embeddings": bool(chroma) if not isinstance(chroma, Exception) else False,
-            "vault_available": bool(vault) if not isinstance(vault, Exception) else False,
-        }
+
+    async def health_check(self) -> HealthStatus:
+        """Verifica la salud del sistema de memoria con métricas detalladas.
+
+        Comprueba conectividad ChromaDB, latencia de query, entradas totales,
+        entradas expiradas y disponibilidad del vault.
+
+        Ejemplo::
+            estado = await memory.health_check()
+            print(estado.status)  # "healthy" | "degraded" | "down"
+
+        Returns:
+            ``HealthStatus`` con estado global y detalles por componente.
+        """
+        chroma_ok = False
+        vault_ok = False
+        total_entradas = 0
+        expiradas = 0
+        latencia_ms = 0.0
+
+        try:
+            chroma_ok, vault_ok = await asyncio.gather(
+                self._long_term.health_check(),
+                self._vault.is_available(),
+                return_exceptions=False,
+            )
+        except Exception as exc:
+            log.debug("Error en health_check gather: %s", exc)
+            chroma_ok = False
+            vault_ok = False
+
+        if chroma_ok:
+            try:
+                t0 = time.monotonic()
+                # Query de prueba: embed + search para medir latencia real
+                await self._long_term.search("health check probe", limit=1)
+                latencia_ms = round((time.monotonic() - t0) * 1000, 1)
+            except Exception:
+                latencia_ms = -1.0
+
+            try:
+                total_entradas = await self._long_term.count()
+            except Exception:
+                pass
+
+            try:
+                expiradas = await self._long_term.count_expired()
+            except Exception:
+                pass
+
+        if not chroma_ok:
+            estado_global: Literal["healthy", "degraded", "down"] = "down"
+        elif latencia_ms > 500 or latencia_ms < 0:
+            estado_global = "degraded"
+        else:
+            estado_global = "healthy"
+
+        return HealthStatus(
+            status=estado_global,
+            details={
+                "chroma": chroma_ok,
+                "ollama_embeddings": chroma_ok,
+                "vault_available": bool(vault_ok),
+                "total_entradas": total_entradas,
+                "entradas_expiradas": expiradas,
+                "latencia_query_ms": latencia_ms,
+            },
+        )
 
     def _to_message(self, value: str | Message, role: str) -> Message:
-        """Normaliza cadenas o mensajes existentes a `Message`.
+        """Normaliza cadenas o mensajes existentes a ``Message``.
+
+        Ejemplo::
+            msg = memory._to_message("hola", "user")
 
         Args:
             value: Texto crudo o mensaje Pydantic.
@@ -194,6 +331,9 @@ class MemorySystem:
 
     def _estimate_importance(self, user: Message, assistant: Message) -> float:
         """Calcula una importancia heurística para decidir persistencia.
+
+        Ejemplo::
+            score = memory._estimate_importance(user_msg, assistant_msg)
 
         Args:
             user: Mensaje del usuario.

@@ -167,6 +167,19 @@
 
 ## ✅ Completado recientemente
 
+### Mejoras de memoria — Mem0 + Zep + LangMem (2026-05-19)
+
+- **`memory/long_term.py`** — Deduplicación activa en `store()`: antes de insertar, busca entradas similares en la misma categoría con `_search_with_scores()`. Si sim ≥ 0.99 → skip silencioso; sim ≥ `memory_dedup_threshold` (0.92) + Jaccard alto → complement (merge de contenidos + update); Jaccard bajo → contradict (expire la entrada antigua con `valid_until = ahora` + crea nueva). `MemoryEntry` añade `updated_at`, `version: int`, `valid_from: datetime | None`, `valid_until: datetime | None`. `search()` y `search_hybrid()` filtran expiradas por defecto (`include_expired: bool = False`). `count_expired()` cuenta entradas con `valid_until` pasado. Dedup loggea con `rich` a stderr.
+- **`memory/procedural.py`** — `update_agent_instructions(feedback, confirm_callback)`: guarda instrucciones aprendidas en colección `jarvis_instructions`, requiere confirmación del usuario, archiva la más antigua si se supera el límite de 10 activas (`valid_until = ahora`). `get_agent_instructions()` devuelve hasta 10 instrucciones activas.
+- **`memory/__init__.py`** — `HealthStatus(BaseModel)` con `status: Literal["healthy","degraded","down"]` y `details: dict`. `health_check()` ahora devuelve `HealthStatus` con: total entradas, entradas expiradas, latencia real de query (embed + search, umbral 500ms), estado de vault. Expone `get_agent_instructions()` y `update_agent_instructions()` en la fachada.
+- **`mcp_servers/server_memory.py`** — `memory.health` serializa `HealthStatus.model_dump()`.
+- **`core/agent.py`** — `_percibir()` carga instrucciones aprendidas del procedural y las añade al `memory_context` como sección "Instrucciones aprendidas".
+- **`config/settings.py`** — `memory_dedup_threshold: float = 0.92`.
+- **ADRs**: ADR-76 (dedup solo dentro de la misma categoría para evitar falsos positivos cross-category), ADR-77 (valid_until serializado como ISO string en metadata_json — compatible con ADR-31), ADR-78 (instrucciones aprendidas en colección `jarvis_instructions` separada — sin interferir con workflows), ADR-79 (health_check mide latencia con query real, umbral 500ms para "degraded").
+- **Tests nuevos** (10): `test_memory_dedup_skip`, `test_memory_dedup_complement`, `test_memory_dedup_update_version`, `test_temporal_validity_filtering`, `test_search_hybrid_excludes_expired`, `test_count_expired`, `test_procedural_update_instructions`, `test_procedural_update_instructions_rejected`, `test_procedural_instructions_max_limit`, `test_agent_loads_learned_instructions`.
+- **`test_memory_health_check`** actualizado a `HealthStatus`.
+- **Suite completa: 276/276 verde (+ 1 skip fastmcp) en ~21s**.
+
 ### Hallazgo crítico del auditor resuelto (2026-05-19)
 - **[CRÍTICO] Scoping de confirmaciones por session_id** — `ConfirmationManager.resolve()` ahora acepta `session_id: str` y verifica que el `request_id` pertenece a esa sesión antes de resolver. Si no coincide lanza `SecurityError` y registra la violación en el audit log con `action_type="security_violation"`. `interface/api.py` y `interface/websocket.py` pasan el session_id del request/conexión.
 - **Rate limiting de confirmaciones por sesión** — máx 10 confirmaciones en 60s por `session_id`. Implementado con `deque(maxlen=10)` de timestamps en `ConfirmationManager`. Exceder el límite devuelve `ConfirmationResult(request_id="rate-limited", confirmed=False)`.
@@ -203,7 +216,7 @@
 
 ## 🔄 En progreso
 
-_(nada activo — Fase 10 completada 2026-05-18)_
+_(nada activo)_
 
 ---
 
@@ -214,6 +227,7 @@ _(nada activo — Fase 10 completada 2026-05-18)_
 3. **Dashboard web** — panel `http://localhost:8765` con historial de sesiones, logs y estado del sistema.
 4. ~~**Scoping de confirmaciones por sesión**~~ — resuelto 2026-05-19 (hallazgo crítico del auditor).
 5. ~~**Migración FastMCP + scoping herramientas + health check**~~ — resuelto 2026-05-19.
+6. ~~**Mejoras de memoria (Mem0 + Zep + LangMem)**~~ — resuelto 2026-05-19.
 
 ---
 
