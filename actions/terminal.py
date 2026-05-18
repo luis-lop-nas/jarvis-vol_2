@@ -106,11 +106,14 @@ class Terminal:
         callback_confirmacion: CallbackConfirmacion | None = None,
         audit_log: "AuditLog | None" = None,
         sandbox_habilitado: bool = True,
+        sandbox: "Sandbox | None" = None,
     ) -> None:
         self._cwd = (directorio_trabajo or _HOME).resolve()
         self._confirmar = callback_confirmacion or _denegar
         self._audit = audit_log
-        self._sandbox = sandbox_habilitado
+        self._sandbox_enabled = sandbox_habilitado
+        self._sandbox = sandbox_habilitado  # mantiene compat con código interno
+        self._security_sandbox = sandbox
         self._procesos_activos: dict[int, asyncio.subprocess.Process] = {}
 
     # ------------------------------------------------------------------
@@ -127,9 +130,27 @@ class Terminal:
     ) -> ResultadoComando:
         """Ejecuta un comando de shell y devuelve el resultado.
 
+        Si se inyectó un Sandbox de seguridad, delega en él (verifica riesgo + auth).
+
         Ejemplo::
             res = await terminal.ejecutar_comando("git status", timeout=10)
         """
+        if self._security_sandbox is not None:
+            cmd_result = await self._security_sandbox.execute_safe(
+                comando,
+                cwd=directorio,
+                timeout=timeout,
+                env=env_extra,
+            )
+            return ResultadoComando(
+                stdout=cmd_result.stdout,
+                stderr=cmd_result.stderr,
+                codigo_retorno=cmd_result.codigo_retorno,
+                duracion_ms=cmd_result.duracion_ms,
+                comando=cmd_result.comando,
+                directorio=cmd_result.directorio,
+            )
+
         argv = self._parsear(comando)
         await self._verificar_permiso(argv, comando)
         return await self._ejecutar(argv, timeout=timeout, directorio=directorio, env_extra=env_extra)
@@ -154,6 +175,10 @@ class Terminal:
             argv = [sys.executable, str(script)] + (args or [])
         else:
             argv = [str(script)] + (args or [])
+
+        if self._security_sandbox is not None:
+            cmd_str = " ".join(shlex.quote(a) for a in argv)
+            await self._security_sandbox.validate_command(cmd_str)
 
         await self._audit_log("ejecutar_script", {"script": str(script)})
         return await self._ejecutar(argv, timeout=timeout)
@@ -186,7 +211,10 @@ class Terminal:
                 print(linea)
         """
         argv = self._parsear(comando)
-        await self._verificar_permiso(argv, comando)
+        if self._security_sandbox is not None:
+            await self._security_sandbox.validate_command(comando)
+        else:
+            await self._verificar_permiso(argv, comando)
 
         cwd_str = str(self._cwd)
         env = self._construir_env()
@@ -353,8 +381,13 @@ class Terminal:
             await self._audit.registrar(evento, datos)
 
 
-# Importación diferida para evitar ciclo
+# Importaciones diferidas para evitar ciclo
 try:
     from security.audit_log import AuditLog  # noqa: F401
 except ImportError:
     AuditLog = None  # type: ignore[assignment,misc]
+
+try:
+    from security.sandbox import Sandbox  # noqa: F401
+except ImportError:
+    Sandbox = None  # type: ignore[assignment,misc]

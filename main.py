@@ -37,7 +37,12 @@ from memory.episodic import MemoriaEpisodica
 from memory.short_term import MemoriaCortoPlazo
 from mcp_servers import crear_bus_mcp
 from models.ollama_client import OllamaModel
+import security
 from security.audit_log import AuditLog
+from security.auth import AuthManager
+from security.confirmation import ConfirmationManager
+from security.permissions import PermissionsManager
+from security.sandbox import Sandbox
 
 console = Console()
 log = logging.getLogger("jarvis")
@@ -130,6 +135,30 @@ def _log_estado_arranque(
 async def _construir_stack() -> AsyncIterator[tuple[Agente, ConnectionManager]]:
     settings.asegurar_directorios()
 
+    # --- Seguridad --- inicializar antes de cualquier otra cosa
+    pm = PermissionsManager()
+    pm.verify_critical()
+
+    audit = AuditLog()
+    await audit.start()
+
+    auth = AuthManager()
+    manager = ConnectionManager()
+
+    # El ws_sender se inyecta después de crear el manager
+    cm = ConfirmationManager(
+        ws_sender=manager.broadcast,
+        auth_manager=auth,
+    )
+    sb = Sandbox(auth_manager=auth, confirmation_manager=cm, audit_log=audit)
+
+    # Publicar instancias en el módulo security para acceso global
+    security.auth_manager = auth
+    security.sandbox = sb
+    security.confirmation_manager = cm
+    security.audit_log = audit
+    security.permissions_manager = pm
+
     permisos, ollama_ok, chroma_ok = await asyncio.gather(
         asyncio.to_thread(_check_permisos_macos),
         _verificar_ollama(),
@@ -146,16 +175,16 @@ async def _construir_stack() -> AsyncIterator[tuple[Agente, ConnectionManager]]:
         reflector=Reflector(modelo),
         memoria_corto=MemoriaCortoPlazo(),
         memoria_episodica=MemoriaEpisodica(),
-        auditoria=AuditLog(),
+        auditoria=audit,
         memoria=memoria,
         mcp_bus=mcp_bus,
     )
-    manager = ConnectionManager()
 
     try:
         yield agente, manager
     finally:
         log.info("Cerrando JARVIS…")
+        await audit.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +196,7 @@ async def main() -> None:
     configurar_logging(settings.log_level)
 
     async with _construir_stack() as (agente, manager):
-        app = crear_servidor(agente, manager)
+        app = crear_servidor(agente, manager, confirmation_manager=security.confirmation_manager)
 
         config = uvicorn.Config(
             app,

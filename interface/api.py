@@ -9,10 +9,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import subprocess
 import time
 from collections import defaultdict, deque
-from typing import Any, AsyncGenerator
+from typing import TYPE_CHECKING, Any, AsyncGenerator
 from uuid import uuid4
 
 import httpx
@@ -22,6 +21,9 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
+
+if TYPE_CHECKING:
+    from security.confirmation import ConfirmationManager
 
 from core.agent import ActualizacionAgente, Agente
 from interface.api_models import (
@@ -40,7 +42,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _session_queues: dict[str, asyncio.Queue] = {}
-_session_history: dict[str, list[AgentUpdate]] = {}
+_session_history: dict[str, deque[AgentUpdate]] = {}
 _session_tasks: dict[str, asyncio.Task] = {}
 
 # Rate limiting: timestamps de requests por session_id (ventana deslizante 1s)
@@ -108,10 +110,8 @@ async def _run_agent_task(
     try:
         async for update in agente.run(message, session_id):
             api_update = _map_update(update)
-            hist = _session_history.setdefault(session_id, [])
+            hist = _session_history.setdefault(session_id, deque(maxlen=MAX_HISTORY))
             hist.append(api_update)
-            if len(hist) > MAX_HISTORY:
-                del hist[0]
             await queue.put(api_update)
             await manager.send(session_id, api_update.model_dump())
     except Exception:
@@ -130,7 +130,11 @@ async def _run_agent_task(
 # ---------------------------------------------------------------------------
 
 
-def crear_servidor(agente: Agente, manager: ConnectionManager) -> FastAPI:
+def crear_servidor(
+    agente: Agente,
+    manager: ConnectionManager,
+    confirmation_manager: "ConfirmationManager | None" = None,
+) -> FastAPI:
     """Construye la aplicación FastAPI completa con todas las rutas."""
 
     app = FastAPI(
@@ -237,9 +241,13 @@ def crear_servidor(agente: Agente, manager: ConnectionManager) -> FastAPI:
         if not _check_rate(session_id):
             raise HTTPException(status_code=429, detail="Rate limit excedido")
 
+        # Desbloquea confirmaciones de seguridad si hay un request_id
+        if confirmation_manager is not None and req.request_id:
+            confirmation_manager.resolve(req.request_id, req.confirmed)
+
         respuesta = "si" if req.confirmed else "no"
         ok = await agente.resume(session_id, respuesta)
-        if not ok:
+        if not ok and (confirmation_manager is None or not req.request_id):
             raise HTTPException(status_code=404, detail="Sesión no activa o no esperando")
         return {"status": "ok"}
 
@@ -285,8 +293,13 @@ def crear_servidor(agente: Agente, manager: ConnectionManager) -> FastAPI:
 
         op_ok = False
         try:
-            res = subprocess.run(["op", "--version"], capture_output=True, timeout=2)
-            op_ok = res.returncode == 0
+            proc = await asyncio.create_subprocess_exec(
+                "op", "--version",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(proc.wait(), timeout=2.0)
+            op_ok = proc.returncode == 0
         except Exception:
             pass
 
@@ -305,8 +318,8 @@ def crear_servidor(agente: Agente, manager: ConnectionManager) -> FastAPI:
 
     @app.get("/history/{session_id}")
     async def history(session_id: str, n: int = 20) -> list[dict]:
-        hist = _session_history.get(session_id, [])
-        return [u.model_dump() for u in hist[-n:]]
+        hist = _session_history.get(session_id, deque())
+        return [u.model_dump() for u in list(hist)[-n:]]
 
     # ------------------------------------------------------------------
     # POST /screenshot — captura pantalla en base64
@@ -333,6 +346,9 @@ def crear_servidor(agente: Agente, manager: ConnectionManager) -> FastAPI:
         websocket: WebSocket,
         session_id: str = "default",
     ) -> None:
+        if not _SESSION_ID_RE.match(session_id):
+            await websocket.close(code=1008, reason="session_id inválido")
+            return
         await manager.connect(websocket, session_id)
         try:
             while True:
@@ -346,7 +362,13 @@ def crear_servidor(agente: Agente, manager: ConnectionManager) -> FastAPI:
                     continue
 
                 tipo = payload.get("type")
-                sid = payload.get("session_id", session_id)
+                raw_sid = payload.get("session_id", session_id)
+                sid = str(raw_sid) if raw_sid is not None else session_id
+                if not _SESSION_ID_RE.match(sid):
+                    await websocket.send_text(
+                        orjson.dumps({"type": "error", "message": "session_id inválido"}).decode()
+                    )
+                    continue
 
                 if tipo == "message":
                     content = payload.get("content", "").strip()
@@ -368,6 +390,9 @@ def crear_servidor(agente: Agente, manager: ConnectionManager) -> FastAPI:
 
                 elif tipo == "confirm":
                     confirmed = bool(payload.get("confirmed", False))
+                    req_id = payload.get("request_id")
+                    if confirmation_manager is not None and req_id:
+                        confirmation_manager.resolve(str(req_id), confirmed)
                     respuesta = "si" if confirmed else "no"
                     await agente.resume(sid, respuesta)
 

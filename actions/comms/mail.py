@@ -63,10 +63,12 @@ class Mail:
         *,
         callback_confirmacion: CallbackConfirmacion | None = None,
         audit_log: "AuditLog | None" = None,
+        auth_manager: "AuthManager | None" = None,
     ) -> None:
         self._s = sistema or ControlSistema()
         self._confirmar = callback_confirmacion or _denegar
         self._audit = audit_log
+        self._auth = auth_manager
 
     # ------------------------------------------------------------------
     # Lectura
@@ -220,6 +222,8 @@ class Mail:
             )
         """
         desc = f"Enviar correo a {', '.join(destinatarios)}: {asunto}"
+        if self._auth is not None:
+            await self._auth.require_auth(desc)
         aprobado = await self._confirmar(desc)
         if not aprobado:
             return False
@@ -255,7 +259,10 @@ class Mail:
         Ejemplo::
             ok = await mail.responder_mensaje("12345", "Gracias por tu mensaje.")
         """
-        aprobado = await self._confirmar(f"Responder al mensaje {message_id}")
+        desc_reply = f"Responder al mensaje {message_id}"
+        if self._auth is not None:
+            await self._auth.require_auth(desc_reply)
+        aprobado = await self._confirmar(desc_reply)
         if not aprobado:
             return False
 
@@ -330,8 +337,13 @@ def _escapar(texto: str) -> str:
     return texto.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
-# Importación diferida
+# Importaciones diferidas
 try:
     from security.audit_log import AuditLog  # noqa: F401
 except ImportError:
     AuditLog = None  # type: ignore[assignment,misc]
+
+try:
+    from security.auth import AuthManager  # noqa: F401
+except ImportError:
+    AuthManager = None  # type: ignore[assignment,misc]

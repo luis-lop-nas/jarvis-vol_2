@@ -25,6 +25,7 @@ class ConfirmRequest(BaseModel):
 
     action_id: str
     confirmed: bool
+    request_id: str | None = None  # ID de la confirmación de seguridad (security/confirmation.py)
 
 
 class AgentUpdate(BaseModel):

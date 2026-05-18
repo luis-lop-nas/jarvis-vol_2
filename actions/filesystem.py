@@ -12,9 +12,9 @@ import re
 import shutil
 from asyncio import Task
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import AsyncGenerator, Callable
+from typing import AsyncGenerator, Awaitable, Callable
 
 _HOME = Path.home()
 
@@ -63,7 +63,7 @@ class PropuestaMover:
 # Callback de confirmación — inyectable, por defecto fail-closed
 # ---------------------------------------------------------------------------
 
-CallbackConfirmacion = Callable[[str], "asyncio.coroutines.CoroType[bool]"]  # type: ignore[type-arg]
+CallbackConfirmacion = Callable[[str], Awaitable[bool]]
 
 
 async def _denegar(_descripcion: str) -> bool:
@@ -115,10 +115,12 @@ class SistemaArchivos:
         *,
         callback_confirmacion: Callable[[str], "asyncio.Future[bool]"] | None = None,
         audit_log: "AuditLog | None" = None,
+        auth_manager: "AuthManager | None" = None,
     ) -> None:
         self._raiz = (raiz_permitida or _HOME).resolve()
         self._confirmar = callback_confirmacion or _denegar
         self._audit = audit_log
+        self._auth = auth_manager
 
         # Importado perezosamente para no romper en CI sin macOS
         self._watchdog_observer: object | None = None
@@ -296,13 +298,15 @@ class SistemaArchivos:
         return True
 
     async def eliminar_directorio(self, ruta: Path, *, recursivo: bool = False) -> bool:
-        """Elimina un directorio. Siempre requiere confirmación.
+        """Elimina un directorio. Siempre requiere Face ID + confirmación.
 
         Ejemplo::
             ok = await fs.eliminar_directorio(Path("~/temporal/"), recursivo=True)
         """
         objetivo = self._validar(ruta)
         desc = f"Eliminar directorio {'recursivamente' if recursivo else ''}: {objetivo}"
+        if self._auth is not None:
+            await self._auth.require_auth(desc)
         aprobado = await self._confirmar(desc)
         if not aprobado:
             return False
@@ -482,8 +486,8 @@ class SistemaArchivos:
             nombre=ruta.name,
             extension=ruta.suffix,
             tamaño_bytes=stat.st_size,
-            creado_en=datetime.fromtimestamp(stat.st_birthtime if hasattr(stat, "st_birthtime") else stat.st_ctime),
-            modificado_en=datetime.fromtimestamp(stat.st_mtime),
+            creado_en=datetime.fromtimestamp(stat.st_birthtime if hasattr(stat, "st_birthtime") else stat.st_ctime, tz=timezone.utc),
+            modificado_en=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
             es_directorio=ruta.is_dir(),
             es_oculto=ruta.name.startswith("."),
             mime_type=mime or "application/octet-stream",
@@ -494,8 +498,13 @@ class SistemaArchivos:
             await self._audit.registrar(evento, datos)
 
 
-# Importación diferida para evitar ciclo con security/
+# Importaciones diferidas para evitar ciclo con security/
 try:
     from security.audit_log import AuditLog  # noqa: F401
 except ImportError:
     AuditLog = None  # type: ignore[assignment,misc]
+
+try:
+    from security.auth import AuthManager  # noqa: F401
+except ImportError:
+    AuthManager = None  # type: ignore[assignment,misc]

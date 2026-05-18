@@ -16,6 +16,7 @@
 - **Fase 6 — Sistema completo de memoria:** ✅ completada
 - **Fase 7 — MCP servers:** ✅ completada
 - **Fase 8 — Interfaz completa (FastAPI + WebSocket + SwiftUI overlay):** ✅ completada
+- **Fase 9 — Seguridad completa (auth, sandbox, confirmation, audit_log, permissions):** ✅ completada
 
 ---
 
@@ -57,6 +58,18 @@
 - **`config/settings.py`** — Añadidos `chroma_host`, `chroma_port`, `chroma_collection`, `short_term_max_tokens`, `short_term_max_messages`, `memory_importance_threshold`, `vault_timeout_seconds`.
 - **`tests/test_memory.py`** — 12 tests con ChromaDB, Ollama y 1Password completamente mockeados: overflow, ventana de contexto, store/search, híbrida deduplicada, episodios, lecciones, workflows, Face ID, `op` ausente, integración de fachada y health check.
 - **Suite completa:** 138/138 verde en 13.22 s.
+
+### Fase 9 — Seguridad completa (2026-05-18)
+- **`security/auth.py`** — `AuthManager` con Face ID via pyobjc LocalAuthentication. `AuthResult/AuthError`. Caché 60s, timeout 30s, `asyncio.to_thread`. Single-flight pattern para evitar doble diálogo. Fallback automático a contraseña. `get_auth_policy()`.
+- **`security/sandbox.py`** — `Sandbox` con `CommandRisk` enum (SAFE/MODERATE/DANGEROUS/BLOCKED). Listas compiladas: `_BLOCKED_PATTERNS`, `_DANGEROUS_PATTERNS`, `_MODERATE_PATTERNS`. Normalización de binarios (detecta `/bin/rm` igual que `rm`). Fail-closed: sin `ConfirmationManager` → SandboxError. `sanitize_path()` y `sanitize_env()`.
+- **`security/confirmation.py`** — `ConfirmationManager` con `asyncio.Event` para pausar el agente. `ws_sender` callback inyectable. `resolve()` idempotente con verificación de expiración. Timeout 60s → confirmed=False.
+- **`security/audit_log.py`** — `AuditEntry(BaseModel)` 13 campos. Rotación diaria JSONL en `~/Library/Logs/JARVIS/`. Cola async fire-and-forget. Sanitización de secrets. `_append_sync` con `O_APPEND|O_CREAT` y permisos 0o600. Compat `registrar()`.
+- **`security/permissions.py`** — `PermissionsManager.verify_critical()` → `sys.exit(1)` si falta ACCESSIBILITY o SCREEN_RECORDING. `wait_for_permission()` polling async. `request()` abre System Settings.
+- **`security/__init__.py`** — Exports + globals module-level `auth_manager`, `sandbox`, `confirmation_manager`, `audit_log`, `permissions_manager`.
+- **Integraciones:** `filesystem.py` (auth para delete_dir), `terminal.py` (sandbox delegation), `mail.py`/`imessage.py` (auth para send), `interface/api.py` (confirmation_manager.resolve en POST /confirm), `main.py` (inicializa stack completo, verify_critical al arrancar).
+- **`tests/test_security.py`** — 54 tests (10 auth, 18 sandbox, 8 confirmation, 6 audit_log, 8 permissions). Mock completo de LocalAuthentication.
+- **Fixes post-auditoría @security-reviewer:** sandbox fail-closed, normalización binarios, resolve() idempotente, audit log O_APPEND+0o600, single-flight auth.
+- **Suite completa:** 230/230 verde en 16.88 s.
 
 ### Fase 8 — Interfaz completa (2026-05-18)
 - **`interface/api_models.py`** — Pydantic: `ChatRequest`, `ChatResponse`, `ConfirmRequest`, `AgentUpdate`, `ConfirmationRequest`, `SystemStatus`.
@@ -141,19 +154,19 @@
 
 ## 🔄 En progreso
 
-_(nada activo — Fase 8 completada)_
+_(nada activo — debug completo del sistema 2026-05-18)_
 
 ---
 
-## ⏳ Siguiente a implementar (Fase 9)
+## ⏳ Siguiente a implementar (Fase 10)
 
-Candidatos para Fase 9:
+Candidatos para Fase 10:
 
-1. **Confirmación vía notificación macOS** — `security/confirmation.py` con callback real al WebSocket: la notificación push aparece en el sistema, el usuario responde y desbloquea el agente.
+1. **Tests e2e runtime** — `tests/test_runtime.py`: arranque completo del agente, tarea filesystem MCP, confirmación aprobada/denegada, cancelación, auditoría real.
 2. **Persistencia de sesiones** — guardar/restaurar sesiones activas en disco para sobrevivir reinicios del servidor.
-3. **Distribución del overlay** — `interface/swiftui/build.sh` ya preparado. Firma y notarización para distribuir a otras Macs. Auto-update system.
-4. **Tests e2e runtime** — `tests/test_runtime.py`: arranque completo del agente, tarea filesystem MCP, confirmación aprobada/denegada, cancelación, auditoría.
-5. **Dashboard web** — panel `http://localhost:8765` con historial de sesiones, logs y estado del sistema.
+3. **Distribución del overlay** — `interface/swiftui/build.sh` ya preparado. Firma y notarización. Auto-update system.
+4. **Dashboard web** — panel `http://localhost:8765` con historial de sesiones, logs y estado del sistema.
+5. **Scoping de confirmaciones por sesión** — vincular `confirmation_manager.resolve()` a `session_id` para evitar que una sesión apruebe confirmaciones de otra (hallazgo crítico del auditor pendiente de resolver completamente).
 
 ---
 
@@ -179,6 +192,27 @@ Candidatos para Fase 9:
 - ADR-32: **Embeddings siempre locales** — `LongTermMemory` usa `models.embeddings.EmbeddingsClient`; no hay envío de memoria a APIs cloud para embeddings.
 - ADR-33: **ChromaDB degradable en tests/CI** — si el servidor no está disponible, la inicialización no rompe imports ni tests del agente; las operaciones de largo plazo fallan de forma explícita y la fachada las registra sin tumbar el loop.
 - ADR-34: **Vault fail-closed con autorización inyectable** — todo `get_*` exige autorización previa; en producción se conectará a Face ID, en tests se mockea sin tocar secretos reales.
+
+### 2026-05-18 (Debug completo del sistema)
+- ADR-57: **`validate_command()` extraído en Sandbox** — permite que `transmitir_comando` y `ejecutar_script` (antes bypasseaban el sandbox) pasen por la misma verificación de riesgo, autenticación y confirmación que `execute_safe`. El audit log usa `log_action()` con `risk_level` real en vez de `registrar()` legacy.
+- ADR-58: **`_session_history` usa `deque(maxlen=MAX_HISTORY)`** — `del hist[0]` era O(n); `deque` lo hace O(1) y elimina la condición de longitud.
+- ADR-59: **`subprocess.run` en `/status` → `asyncio.create_subprocess_exec`** — la llamada bloqueante a `op --version` podía bloquear el event loop 2s; ahora es completamente async.
+- ADR-60: **WebSocket `confirm` resuelve confirmaciones de seguridad** — el handler WS ahora también llama `confirmation_manager.resolve()` si el payload incluye `request_id`, igual que el endpoint REST. Evitaba que confirmaciones desde el overlay quedaran colgadas.
+- ADR-61: **Validación de `session_id` en WebSocket** — tanto el parámetro de query como el `session_id` del payload se validan contra `_SESSION_ID_RE`; conexiones inválidas se cierran con código 1008.
+- ADR-62: **`get_event_loop()` → `get_running_loop()` en `wait_for_permission`** — en Python 3.12 `get_event_loop()` desde coroutine emite DeprecationWarning; `get_running_loop()` es la API correcta.
+- ADR-63: **`_resolve_lock` eliminado en `ConfirmationManager`** — se creaba en `__init__` pero nunca se usaba; su presencia era engañosa. La seguridad de `resolve()` la garantiza el modelo single-threaded de asyncio.
+- ADR-64: **`tmp_path` inicializado antes del try en `_check_screen_recording`** — evita `NameError` en el bloque `finally` si `NamedTemporaryFile` falla antes de asignar la variable.
+- ADR-65: **LangGraph conditional corregido en `_construir_grafo_langgraph`** — el lambda devolvía siempre "responder" independientemente de la condición; ahora distingue entre "responder" (tarea completa) y "pensar" (continuar loop).
+- ADR-66: **`datetime.fromtimestamp` con `tz=timezone.utc` en `filesystem.py`** — evita datetimes naive inconsistentes con el resto del sistema que usa UTC.
+- ADR-67: **`CallbackConfirmacion` usa `Awaitable[bool]`** — el tipo `asyncio.coroutines.CoroType` no existe en Python 3.12; `Awaitable[bool]` es el tipo correcto.
+
+### 2026-05-18 (Fase 9 — Seguridad)
+- ADR-51: **Instancias globales en `security/__init__.py`** — inicializadas en `main.py` y accesibles en todo el proyecto. Evita pasar security objects por toda la cadena de llamadas; los módulos comprueban `is None` antes de usar.
+- ADR-52: **Sandbox fail-closed** — DANGEROUS/MODERATE sin `ConfirmationManager` configurado → `SandboxError` inmediato. Nunca ejecución silenciosa sin confirmación.
+- ADR-53: **Normalización de binarios en sandbox** — `_normalize_command()` reemplaza paths absolutos por nombre base antes de evaluar patrones. Evita bypass con `/bin/rm -rf /`.
+- ADR-54: **`resolve()` idempotente en ConfirmationManager** — verifica `expires_at` y `event.is_set()` antes de mutar `result_box`. Evita sobreescritura tardía de confirmaciones expiradas.
+- ADR-55: **Audit log con `O_APPEND` + `0o600`** — `_append_sync` usa `os.open()` con flags atómicos y permisos restrictivos para privacidad del log.
+- ADR-56: **Single-flight en AuthManager** — `_in_flight: Future` evita dos diálogos Face ID simultáneos; `finally` siempre resuelve el future y limpia el estado aunque la corutina sea cancelada.
 
 ### 2026-05-18 (Fase 8 — Interfaz)
 - ADR-44: **Estado de sesiones module-level compartido** — `_session_queues/history/tasks` son dicts module-level; `crear_servidor()` inyecta agente/manager pero comparte el estado de sesión, lo que permite que SSE y WS accedan a la misma cola sin coordinación extra.

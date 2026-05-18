@@ -599,8 +599,8 @@ def _construir_grafo_langgraph(agente: "Agente") -> object | None:
         builder.add_edge("percibir", "pensar")
         builder.add_conditional_edges(
             "pensar",
-            lambda s: "responder" if s.get("abort_reason") or s.get("tarea_completada") else "responder",
-            {"responder": "responder"},
+            lambda s: "responder" if s.get("abort_reason") or s.get("tarea_completada") else "pensar",
+            {"responder": "responder", "pensar": "pensar"},
         )
         builder.add_edge("responder", END)
 

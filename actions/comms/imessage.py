@@ -78,11 +78,13 @@ class IMessage:
         callback_confirmacion: CallbackConfirmacion | None = None,
         audit_log: "AuditLog | None" = None,
         contactos_conocidos: set[str] | None = None,
+        auth_manager: "AuthManager | None" = None,
     ) -> None:
         self._s = sistema or ControlSistema()
         self._confirmar = callback_confirmacion or _denegar
         self._audit = audit_log
         self._conocidos = contactos_conocidos or set()
+        self._auth = auth_manager
 
     # ------------------------------------------------------------------
     # Lectura
@@ -176,7 +178,10 @@ class IMessage:
         Ejemplo::
             ok = await im.enviar_mensaje("+34612345678", "Hola, ¿cómo estás?")
         """
-        aprobado = await self._confirmar(f"Enviar iMessage a {contacto}: «{texto[:80]}»")
+        desc_im = f"Enviar iMessage a {contacto}: «{texto[:80]}»"
+        if self._auth is not None:
+            await self._auth.require_auth(desc_im)
+        aprobado = await self._confirmar(desc_im)
         if not aprobado:
             return False
 
@@ -198,7 +203,10 @@ class IMessage:
             ok = await im.enviar_archivo("+34612345678", Path("~/foto.jpg"))
         """
         ruta_resuelta = ruta.expanduser().resolve()
-        aprobado = await self._confirmar(f"Enviar archivo {ruta_resuelta.name} a {contacto} por iMessage")
+        desc_file = f"Enviar archivo {ruta_resuelta.name} a {contacto} por iMessage"
+        if self._auth is not None:
+            await self._auth.require_auth(desc_file)
+        aprobado = await self._confirmar(desc_file)
         if not aprobado:
             return False
 
@@ -222,8 +230,13 @@ def _escapar(texto: str) -> str:
     return texto.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
-# Importación diferida
+# Importaciones diferidas
 try:
     from security.audit_log import AuditLog  # noqa: F401
 except ImportError:
     AuditLog = None  # type: ignore[assignment,misc]
+
+try:
+    from security.auth import AuthManager  # noqa: F401
+except ImportError:
+    AuthManager = None  # type: ignore[assignment,misc]
