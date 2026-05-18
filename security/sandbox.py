@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from security.audit_log import AuditLog
     from security.auth import AuthManager
     from security.confirmation import ConfirmationManager
+    from security.docker_sandbox import DockerSandbox
 
 log = __import__("logging").getLogger(__name__)
 
@@ -153,10 +154,12 @@ class Sandbox:
         auth_manager: AuthManager | None = None,
         confirmation_manager: ConfirmationManager | None = None,
         audit_log: AuditLog | None = None,
+        docker_sandbox: DockerSandbox | None = None,
     ) -> None:
         self._auth = auth_manager
         self._confirm = confirmation_manager
         self._audit = audit_log
+        self._docker = docker_sandbox
 
     @staticmethod
     def _normalize_command(command: str) -> str:
@@ -280,13 +283,19 @@ class Sandbox:
         """Ejecuta un comando tras verificar riesgo, pedir confirmación y auditar.
 
         1. validate_command() — BLOCKED → SandboxError; DANGEROUS/MODERATE → confirmación
-        2. ejecutar con subprocess, timeout, sin shell=True
-        3. audit_log del resultado con risk_level real
+        2. Si DANGEROUS y Docker disponible: ejecutar en contenedor Alpine temporal
+        3. Si no: ejecutar con subprocess, timeout, sin shell=True
+        4. audit_log del resultado con risk_level real
 
         Ejemplo::
             result = await sandbox.execute_safe("git status")
         """
         risk_level = await self.validate_command(command)
+
+        if risk_level == CommandRisk.DANGEROUS and self._docker is not None:
+            if await self._docker.is_available():
+                return await self._run_in_docker(command, cwd=cwd, timeout=timeout, risk_level=risk_level)
+
         return await self._run(command, cwd=cwd, timeout=timeout, env=env, risk_level=risk_level)
 
     def sanitize_path(self, path: str | Path) -> Path:
@@ -319,6 +328,44 @@ class Sandbox:
     # ------------------------------------------------------------------
     # Ejecución interna
     # ------------------------------------------------------------------
+
+    async def _run_in_docker(
+        self,
+        command: str,
+        *,
+        cwd: Path | None = None,
+        timeout: float,
+        risk_level: CommandRisk,
+    ) -> CommandResult:
+        """Ejecuta un comando DANGEROUS en el sandbox Docker."""
+        assert self._docker is not None
+        inicio = time.monotonic()
+        stdout, stderr, rc = await self._docker.run(command, cwd=cwd, timeout=timeout)
+        duracion_ms = (time.monotonic() - inicio) * 1000
+
+        result = CommandResult(
+            stdout=stdout,
+            stderr=stderr,
+            codigo_retorno=rc,
+            duracion_ms=duracion_ms,
+            comando=command,
+            directorio=str((cwd or _HOME).resolve()),
+        )
+
+        if self._audit is not None:
+            await self._audit.log_action(
+                session_id="",
+                action_type="terminal",
+                action="docker_sandbox.execute",
+                details={"command": command, "exit_code": rc},
+                result="success" if result.exito else "failed",
+                risk_level=risk_level.value,
+                confirmed=True,
+                authenticated=self._auth is not None,
+                duration_ms=round(duracion_ms),
+            )
+
+        return result
 
     async def _run(
         self,

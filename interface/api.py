@@ -12,6 +12,7 @@ import re
 import time
 from collections import defaultdict, deque
 from collections.abc import AsyncGenerator
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -24,7 +25,10 @@ from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 if TYPE_CHECKING:
+    from security.audit_log import AuditLog
     from security.confirmation import ConfirmationManager
+
+from security.confirmation import SecurityError
 
 from core.agent import ActualizacionAgente, Agente
 from interface.api_models import (
@@ -135,6 +139,7 @@ def crear_servidor(
     agente: Agente,
     manager: ConnectionManager,
     confirmation_manager: ConfirmationManager | None = None,
+    audit_log: AuditLog | None = None,
 ) -> FastAPI:
     """Construye la aplicación FastAPI completa con todas las rutas."""
 
@@ -244,7 +249,10 @@ def crear_servidor(
 
         # Desbloquea confirmaciones de seguridad si hay un request_id
         if confirmation_manager is not None and req.request_id:
-            confirmation_manager.resolve(req.request_id, req.confirmed)
+            try:
+                confirmation_manager.resolve(req.request_id, req.confirmed, session_id)
+            except SecurityError:
+                raise HTTPException(status_code=403, detail="Violación de seguridad: sesión incorrecta") from None
 
         respuesta = "si" if req.confirmed else "no"
         ok = await agente.resume(session_id, respuesta)
@@ -323,6 +331,22 @@ def crear_servidor(
         return [u.model_dump() for u in list(hist)[-n:]]
 
     # ------------------------------------------------------------------
+    # GET /audit — consulta filtrada del audit log (requiere auth)
+    # ------------------------------------------------------------------
+
+    @app.get("/audit")
+    async def audit_query(
+        action_type: str | None = None,
+        hours: int = 24,
+        limit: int = 100,
+    ) -> list[dict]:
+        if audit_log is None:
+            raise HTTPException(status_code=503, detail="Audit log no disponible")
+        since = datetime.now(UTC) - timedelta(hours=hours)
+        entries = await audit_log.query(action_type=action_type, since=since, limit=limit)
+        return [e.model_dump(mode="json") for e in entries]
+
+    # ------------------------------------------------------------------
     # POST /screenshot — captura pantalla en base64
     # ------------------------------------------------------------------
 
@@ -393,7 +417,13 @@ def crear_servidor(
                     confirmed = bool(payload.get("confirmed", False))
                     req_id = payload.get("request_id")
                     if confirmation_manager is not None and req_id:
-                        confirmation_manager.resolve(str(req_id), confirmed)
+                        try:
+                            confirmation_manager.resolve(str(req_id), confirmed, sid)
+                        except SecurityError:
+                            await websocket.send_text(
+                                orjson.dumps({"type": "error", "message": "Violación de seguridad: sesión incorrecta"}).decode()
+                            )
+                            continue
                     respuesta = "si" if confirmed else "no"
                     await agente.resume(sid, respuesta)
 

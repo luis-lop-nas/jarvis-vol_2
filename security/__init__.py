@@ -4,13 +4,14 @@ Otros módulos solo importan desde aquí.
 Las instancias globales se inicializan en main.py.
 """
 
-from security.audit_log import AuditEntry, AuditLog
+from security.audit_log import AuditEntry, AuditLog, AuditStats
 from security.auth import AuthError, AuthManager, AuthResult
 from security.confirmation import (
     ConfirmationError,
     ConfirmationManager,
     ConfirmationRequest,
     ConfirmationResult,
+    SecurityError,
 )
 from security.permissions import Permission, PermissionsManager, PermissionStatus
 from security.sandbox import CommandRisk, Sandbox, SandboxError, SandboxResult
@@ -34,9 +35,11 @@ __all__ = [
     "ConfirmationRequest",
     "ConfirmationResult",
     "ConfirmationError",
+    "SecurityError",
     # audit_log
     "AuditLog",
     "AuditEntry",
+    "AuditStats",
     # permissions
     "PermissionsManager",
     "Permission",

@@ -11,9 +11,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from security.audit_log import AuditLog
+from pathlib import Path
+
+from security.audit_log import AuditLog, AuditStats
 from security.auth import AuthError, AuthManager
-from security.confirmation import ConfirmationError, ConfirmationManager
+from security.confirmation import ConfirmationError, ConfirmationManager, SecurityError
+from security.docker_sandbox import DockerSandbox, DockerSandboxError
 from security.permissions import Permission, PermissionsManager
 from security.sandbox import CommandRisk, Sandbox, SandboxError
 
@@ -779,3 +782,287 @@ class TestPermissionsManager:
         call_args = mock_popen.call_args[0][0]
         assert "open" in call_args
         assert "Accessibility" in call_args[1]
+
+
+# ---------------------------------------------------------------------------
+# ConfirmationManager — scoping y rate limiting (hallazgo crítico)
+# ---------------------------------------------------------------------------
+
+
+class TestConfirmationScoping:
+    @pytest.mark.asyncio
+    async def test_confirmation_cross_session_blocked(self):
+        """resolve() con sesión incorrecta lanza SecurityError."""
+        cm = ConfirmationManager()
+
+        request_task = asyncio.create_task(
+            cm.request_confirmation("Acción peligrosa", session_id="session-A")
+        )
+        await asyncio.sleep(0.05)
+
+        pending = cm.get_pending()
+        assert len(pending) == 1
+
+        with pytest.raises(SecurityError):
+            cm.resolve(pending[0].id, confirmed=True, session_id="session-B")
+
+        # La confirmación sigue pendiente — no fue resuelta
+        assert pending[0].id in cm._pending
+
+        # Resolver correctamente para no dejar la tarea colgada
+        cm.resolve(pending[0].id, confirmed=False, session_id="session-A")
+        result = await request_task
+        assert result.confirmed is False
+
+    @pytest.mark.asyncio
+    async def test_confirmation_same_session_ok(self):
+        """resolve() con la sesión correcta funciona normalmente."""
+        cm = ConfirmationManager()
+
+        async def _approve():
+            await asyncio.sleep(0.05)
+            pending = cm.get_pending()
+            assert len(pending) == 1
+            cm.resolve(pending[0].id, confirmed=True, session_id="session-A")
+
+        task = asyncio.create_task(_approve())
+        result = await cm.request_confirmation("Acción", session_id="session-A")
+        await task
+
+        assert result.confirmed is True
+
+    @pytest.mark.asyncio
+    async def test_confirmation_violation_logged(self):
+        """Una violación cross-session queda registrada en el audit log."""
+        audit_mock = AsyncMock()
+        audit_mock.log_action = AsyncMock()
+
+        cm = ConfirmationManager(audit_log=audit_mock)
+
+        request_task = asyncio.create_task(
+            cm.request_confirmation("Acción peligrosa", session_id="session-A")
+        )
+        await asyncio.sleep(0.05)
+
+        pending = cm.get_pending()
+        with pytest.raises(SecurityError):
+            cm.resolve(pending[0].id, confirmed=True, session_id="session-B")
+
+        # Dar tiempo al task fire-and-forget para ejecutarse
+        await asyncio.sleep(0.05)
+
+        audit_mock.log_action.assert_called_once()
+        call_kwargs = audit_mock.log_action.call_args.kwargs
+        assert call_kwargs["action_type"] == "security_violation"
+        assert call_kwargs["result"] == "blocked"
+        assert call_kwargs["session_id"] == "session-B"
+
+        # Limpiar
+        cm.resolve(pending[0].id, confirmed=False, session_id="session-A")
+        await request_task
+
+    @pytest.mark.asyncio
+    async def test_confirmation_rate_limit_exceeded(self):
+        """Más de 10 confirmaciones en 60s desde la misma sesión son rechazadas."""
+        cm = ConfirmationManager()
+
+        # Agotar el rate limiter con 10 solicitudes que expiran por timeout
+        with patch("security.confirmation._CONFIRMATION_TIMEOUT", 0.01):
+            for _ in range(10):
+                await cm.request_confirmation("Acción", session_id="sess-test")
+
+        # La undécima debe ser rechazada inmediatamente por rate limit
+        result = await cm.request_confirmation("Acción extra", session_id="sess-test")
+        assert result.confirmed is False
+        assert result.request_id == "rate-limited"
+
+    @pytest.mark.asyncio
+    async def test_confirmation_no_scoping_without_session(self):
+        """Si la solicitud no tiene session_id, cualquier sesión puede resolverla (compatibilidad)."""
+        cm = ConfirmationManager()
+
+        async def _approve():
+            await asyncio.sleep(0.05)
+            pending = cm.get_pending()
+            # resolve con session_id distinto — no hay SecurityError porque req.session_id=""
+            cm.resolve(pending[0].id, confirmed=True, session_id="any-session")
+
+        task = asyncio.create_task(_approve())
+        result = await cm.request_confirmation("Acción sin sesión")  # sin session_id
+        await task
+
+        assert result.confirmed is True
+
+
+# ---------------------------------------------------------------------------
+# DockerSandbox tests
+# ---------------------------------------------------------------------------
+
+
+class TestDockerSandbox:
+    @pytest.mark.asyncio
+    async def test_docker_sandbox_executes(self):
+        """DockerSandbox.run() ejecuta el comando y devuelve la salida."""
+        sandbox = DockerSandbox()
+
+        with patch.object(sandbox, "_force_remove", AsyncMock()):
+            with patch("asyncio.create_subprocess_exec") as mock_exec:
+                proc = AsyncMock()
+                proc.communicate = AsyncMock(return_value=(b"hello\n", b""))
+                proc.returncode = 0
+                mock_exec.return_value = proc
+
+                stdout, stderr, rc = await sandbox.run("echo hello", cwd=Path.home())
+
+        assert stdout == "hello\n"
+        assert stderr == ""
+        assert rc == 0
+
+    @pytest.mark.asyncio
+    async def test_docker_sandbox_destroyed_on_error(self):
+        """El contenedor se destruye incluso cuando el comando supera el timeout."""
+        sandbox = DockerSandbox()
+        removed: list[str] = []
+
+        async def mock_force_remove(container_name: str) -> None:
+            removed.append(container_name)
+
+        with patch.object(sandbox, "_force_remove", side_effect=mock_force_remove):
+            with patch("asyncio.create_subprocess_exec") as mock_exec:
+                proc = AsyncMock()
+                proc.communicate = AsyncMock(side_effect=TimeoutError())
+                proc.kill = MagicMock()  # kill() es síncrono en asyncio.Process
+                proc.wait = AsyncMock(return_value=-1)
+                mock_exec.return_value = proc
+
+                with pytest.raises(DockerSandboxError):
+                    await sandbox.run("sleep 100", cwd=Path.home(), timeout=0.01)
+
+        assert len(removed) == 1
+        assert removed[0].startswith("jarvis-sandbox-")
+
+    @pytest.mark.asyncio
+    async def test_docker_sandbox_disabled_fallback(self):
+        """Si Docker no está disponible, execute_safe usa el camino de ejecución normal."""
+        docker = DockerSandbox()
+        auth = AsyncMock(spec=AuthManager)
+        auth.require_auth = AsyncMock()
+        confirm = AsyncMock(spec=ConfirmationManager)
+        confirm.request_confirmation = AsyncMock(return_value=MagicMock(confirmed=True))
+
+        sb = Sandbox(
+            auth_manager=auth,
+            confirmation_manager=confirm,
+            docker_sandbox=docker,
+        )
+
+        with patch.object(docker, "is_available", AsyncMock(return_value=False)):
+            with patch("asyncio.create_subprocess_exec") as mock_exec:
+                proc = AsyncMock()
+                proc.communicate = AsyncMock(return_value=(b"ok\n", b""))
+                proc.returncode = 0
+                proc.pid = 1234
+                mock_exec.return_value = proc
+
+                result = await sb.execute_safe("sudo ls")
+
+        assert result.exito is True
+        # Confirmación fue pedida (camino normal, no Docker)
+        confirm.request_confirmation.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_docker_is_available_caches_result(self):
+        """is_available() solo llama a docker una vez; cachea el resultado."""
+        sandbox = DockerSandbox()
+
+        call_count = 0
+
+        async def fake_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            proc = AsyncMock()
+            proc.wait = AsyncMock(return_value=0)
+            proc.returncode = 0
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+            r1 = await sandbox.is_available()
+            r2 = await sandbox.is_available()
+
+        assert r1 is True
+        assert r2 is True
+        assert call_count == 1  # solo una llamada a docker version
+
+
+# ---------------------------------------------------------------------------
+# AuditLog — query y stats
+# ---------------------------------------------------------------------------
+
+
+class TestAuditQuery:
+    @pytest.mark.asyncio
+    async def test_audit_query_by_type(self, tmp_path):
+        """query() filtra por action_type."""
+        audit = AuditLog(base_dir=tmp_path)
+        await audit.start()
+
+        await audit.log_action(
+            session_id="s1", action_type="filesystem", action="leer",
+            result="success", risk_level="safe",
+            confirmed=False, authenticated=False, duration_ms=5,
+        )
+        await audit.log_action(
+            session_id="s1", action_type="terminal", action="cmd",
+            result="success", risk_level="moderate",
+            confirmed=True, authenticated=False, duration_ms=100,
+        )
+        await audit._queue.join()
+
+        fs_entries = await audit.query(action_type="filesystem")
+        assert len(fs_entries) == 1
+        assert fs_entries[0].action == "leer"
+
+        terminal_entries = await audit.query(action_type="terminal")
+        assert len(terminal_entries) == 1
+
+        all_entries = await audit.query()
+        assert len(all_entries) == 2
+
+        await audit.stop()
+
+    @pytest.mark.asyncio
+    async def test_audit_stats(self, tmp_path):
+        """stats() devuelve totales, por tipo, fallidas y violaciones correctas."""
+        audit = AuditLog(base_dir=tmp_path)
+        await audit.start()
+
+        for _ in range(3):
+            await audit.log_action(
+                session_id="s1", action_type="filesystem", action="leer",
+                result="success", risk_level="safe",
+                confirmed=False, authenticated=False, duration_ms=10,
+            )
+        await audit.log_action(
+            session_id="s1", action_type="terminal", action="cmd",
+            result="failed", risk_level="moderate",
+            confirmed=True, authenticated=False, duration_ms=200,
+        )
+        await audit.log_action(
+            session_id="s1", action_type="security_violation", action="cross_session",
+            result="blocked", risk_level="dangerous",
+            confirmed=False, authenticated=False, duration_ms=0,
+        )
+        await audit._queue.join()
+
+        s = await audit.stats()
+        assert isinstance(s, AuditStats)
+        assert s.total_actions == 5
+        assert s.actions_by_type["filesystem"] == 3
+        assert s.actions_by_type["terminal"] == 1
+        assert s.actions_by_type["security_violation"] == 1
+        assert s.failed_actions == 1
+        assert s.security_violations == 1
+        assert "filesystem" in s.avg_duration_ms
+        assert abs(s.avg_duration_ms["filesystem"] - 10.0) < 0.01
+
+        await audit.stop()

@@ -48,6 +48,16 @@ class AuditEntry(BaseModel):
     error: str | None = None
 
 
+class AuditStats(BaseModel):
+    """Estadísticas de una ventana de auditoría."""
+
+    total_actions: int
+    actions_by_type: dict[str, int]
+    failed_actions: int
+    security_violations: int
+    avg_duration_ms: dict[str, float]
+
+
 class AuditLog:
     """Log append-only en JSONL con rotación diaria.
 
@@ -261,6 +271,74 @@ class AuditLog:
                 writer.writerow(e.model_dump())
         await asyncio.to_thread(out_path.write_text, buf.getvalue(), "utf-8")
         return out_path
+
+    async def query(
+        self,
+        action_type: str | None = None,
+        since: datetime | None = None,
+        limit: int = 100,
+    ) -> list[AuditEntry]:
+        """Filtra entradas del log JSONL del día actual por tipo y/o fecha.
+
+        Lee el JSONL del día y aplica filtros en memoria. Async, no bloquea el event loop.
+
+        Ejemplo::
+            entries = await audit.query(action_type="filesystem", since=datetime(2026,5,19,tzinfo=UTC))
+        """
+        target_date = (since.date() if since else date.today())
+        ruta = self._daily_path(target_date)
+        if not ruta.exists():
+            return []
+
+        texto = await asyncio.to_thread(ruta.read_text, "utf-8")
+        entradas: list[AuditEntry] = []
+        for linea in texto.strip().splitlines():
+            if not linea:
+                continue
+            try:
+                data = orjson.loads(linea)
+                entry = AuditEntry.model_validate(data)
+                if action_type and entry.action_type != action_type:
+                    continue
+                if since and entry.timestamp < since:
+                    continue
+                entradas.append(entry)
+            except Exception:
+                pass
+        return entradas[-limit:]
+
+    async def stats(self, since: datetime | None = None) -> AuditStats:
+        """Calcula estadísticas de la ventana especificada (hoy si None).
+
+        Ejemplo::
+            s = await audit.stats()
+            print(s.total_actions, s.security_violations)
+        """
+        entradas = await self.query(since=since, limit=10_000)
+
+        by_type: dict[str, int] = {}
+        failed = 0
+        violations = 0
+        durations: dict[str, list[float]] = {}
+
+        for e in entradas:
+            by_type[e.action_type] = by_type.get(e.action_type, 0) + 1
+            if e.result == "failed":
+                failed += 1
+            if e.action_type == "security_violation":
+                violations += 1
+            if e.duration_ms > 0:
+                durations.setdefault(e.action_type, []).append(float(e.duration_ms))
+
+        avg_ms = {k: sum(v) / len(v) for k, v in durations.items() if v}
+
+        return AuditStats(
+            total_actions=len(entradas),
+            actions_by_type=by_type,
+            failed_actions=failed,
+            security_violations=violations,
+            avg_duration_ms=avg_ms,
+        )
 
     async def leer_recientes(self, n: int = 100) -> list[dict[str, Any]]:
         """Compatibilidad con API antigua — devuelve últimas n entradas del día."""

@@ -87,6 +87,7 @@ class Settings(BaseSettings):
     confirmacion_destructiva: bool = Field(default=True)
     max_acciones_autonomas: int = Field(default=10, ge=1)
     sandbox_enabled: bool = Field(default=True)
+    security_docker_sandbox_enabled: bool = Field(default=False)
 
     # --- Identidad ---
     usuario_nombre: str = Field(default="Usuario")

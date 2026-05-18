@@ -149,6 +149,7 @@ async def _construir_stack() -> AsyncIterator[tuple[Agente, ConnectionManager]]:
     cm = ConfirmationManager(
         ws_sender=manager.broadcast,
         auth_manager=auth,
+        audit_log=audit,
     )
     sb = Sandbox(auth_manager=auth, confirmation_manager=cm, audit_log=audit)
 
@@ -196,7 +197,12 @@ async def main() -> None:
     configurar_logging(settings.log_level)
 
     async with _construir_stack() as (agente, manager):
-        app = crear_servidor(agente, manager, confirmation_manager=security.confirmation_manager)
+        app = crear_servidor(
+            agente,
+            manager,
+            confirmation_manager=security.confirmation_manager,
+            audit_log=security.audit_log,
+        )
 
         config = uvicorn.Config(
             app,

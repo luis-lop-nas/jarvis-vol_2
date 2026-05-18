@@ -154,6 +154,14 @@
 
 ## ✅ Completado recientemente
 
+### Hallazgo crítico del auditor resuelto (2026-05-19)
+- **[CRÍTICO] Scoping de confirmaciones por session_id** — `ConfirmationManager.resolve()` ahora acepta `session_id: str` y verifica que el `request_id` pertenece a esa sesión antes de resolver. Si no coincide lanza `SecurityError` y registra la violación en el audit log con `action_type="security_violation"`. `interface/api.py` y `interface/websocket.py` pasan el session_id del request/conexión.
+- **Rate limiting de confirmaciones por sesión** — máx 10 confirmaciones en 60s por `session_id`. Implementado con `deque(maxlen=10)` de timestamps en `ConfirmationManager`. Exceder el límite devuelve `ConfirmationResult(request_id="rate-limited", confirmed=False)`.
+- **Sandbox Docker opcional** — `security/docker_sandbox.py` con clase `DockerSandbox`. Para comandos DANGEROUS con Docker disponible y `security_docker_sandbox_enabled=True` en settings: contenedor Alpine temporal, `--network none`, directorio montado read-only, destrucción garantizada en `finally` (fail-closed). `config/settings.py` añade `security_docker_sandbox_enabled: bool = False`.
+- **Audit log con query y estadísticas** — `AuditLog.query(action_type, since, limit)` y `AuditLog.stats(since)` que devuelve `AuditStats` (total, por tipo, fallidas, violaciones, avg_duration_ms). Expuesto en `GET /audit?action_type=X&hours=24`.
+- **ADRs**: ADR-68 (scoping por session_id en confirmaciones), ADR-69 (rate limiting con deque en ConfirmationManager), ADR-70 (Docker sandbox fail-closed en finally), ADR-71 (query/stats en audit log como método async no bloqueante).
+- **Suite completa: 259/259 verde en 24.45s** (248 previos + 11 nuevos).
+
 ### Fase 10 — Tests e2e + Benchmarks (2026-05-18)
 - **`tests/e2e/test_full_system.py`** — 12 tests end-to-end completos:
   - `test_e2e_simple_file_read`: lectura de archivo real con herramienta inyectada
@@ -191,7 +199,7 @@ _(nada activo — Fase 10 completada 2026-05-18)_
 1. **Persistencia de sesiones** — guardar/restaurar sesiones activas en disco para sobrevivir reinicios del servidor.
 2. **Distribución del overlay** — `interface/swiftui/build.sh` ya preparado. Firma y notarización. Auto-update system.
 3. **Dashboard web** — panel `http://localhost:8765` con historial de sesiones, logs y estado del sistema.
-4. **Scoping de confirmaciones por sesión** — vincular `confirmation_manager.resolve()` a `session_id` para evitar que una sesión apruebe confirmaciones de otra (hallazgo crítico del auditor pendiente).
+4. ~~**Scoping de confirmaciones por sesión**~~ — resuelto 2026-05-19 (hallazgo crítico del auditor).
 
 ---
 
@@ -238,6 +246,12 @@ _(nada activo — Fase 10 completada 2026-05-18)_
 - ADR-54: **`resolve()` idempotente en ConfirmationManager** — verifica `expires_at` y `event.is_set()` antes de mutar `result_box`. Evita sobreescritura tardía de confirmaciones expiradas.
 - ADR-55: **Audit log con `O_APPEND` + `0o600`** — `_append_sync` usa `os.open()` con flags atómicos y permisos restrictivos para privacidad del log.
 - ADR-56: **Single-flight en AuthManager** — `_in_flight: Future` evita dos diálogos Face ID simultáneos; `finally` siempre resuelve el future y limpia el estado aunque la corutina sea cancelada.
+
+### 2026-05-19 (Hallazgo crítico del auditor)
+- ADR-68: **Scoping de confirmaciones por session_id** — `ConfirmationRequest.session_id` y `resolve(request_id, confirmed, session_id)`. Si ambos son no-vacíos y no coinciden → `SecurityError` + audit `security_violation`. Compatibilidad hacia atrás: `session_id=""` desactiva el scoping.
+- ADR-69: **Rate limiting en ConfirmationManager con deque(maxlen=10)** — mismo patrón que el rate limit de la API (ADR-45). La ventana es 60s porque las confirmaciones son acciones lentas del usuario, no peticiones HTTP.
+- ADR-70: **Docker sandbox fail-closed con `finally`** — el contenedor se destruye siempre en el bloque `finally` de `DockerSandbox.run()`. Si `_force_remove` falla, la excepción se suprime (el propio `--rm` de Docker lo habría destruido). `is_available()` cachea el resultado para no llamar a Docker en cada ejecución.
+- ADR-71: **`query()` y `stats()` leen JSONL con `asyncio.to_thread`** — mismo patrón que `get_entries()` ya existente (ADR-55). `stats()` delega en `query()` para no duplicar el código de lectura de fichero.
 
 ### 2026-05-18 (Fase 8 — Interfaz)
 - ADR-44: **Estado de sesiones module-level compartido** — `_session_queues/history/tasks` son dicts module-level; `crear_servidor()` inyecta agente/manager pero comparte el estado de sesión, lo que permite que SSE y WS accedan a la misma cola sin coordinación extra.
