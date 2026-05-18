@@ -132,3 +132,75 @@ async def test_mcp_bus_validates_input_schema() -> None:
 
     assert resultado.success is False
     assert "ValidationError" in (resultado.error or "")
+
+
+@pytest.mark.asyncio
+async def test_mcp_bus_tool_allowed_default() -> None:
+    """Por defecto todas las herramientas están permitidas para cualquier sesión."""
+    bus = MCPBus([FakeServer()])
+
+    assert bus.allow_tool("fake.echo", "session-abc") is True
+    assert bus.allow_tool("fake.echo", "") is True
+    assert bus.allow_tool("fake.echo", "otra-sesion") is True
+
+
+@pytest.mark.asyncio
+async def test_mcp_bus_tool_restricted() -> None:
+    """Una herramienta restringida devuelve error para esa sesión."""
+    bus = MCPBus([FakeServer()])
+    bus.restrict_session("session-x", ["fake.echo"])
+
+    resultado = await bus.execute("fake.echo", {}, session_id="session-x")
+
+    assert resultado.success is False
+    assert "no autorizada" in (resultado.error or "")
+
+
+@pytest.mark.asyncio
+async def test_mcp_bus_restriction_does_not_affect_other_sessions() -> None:
+    """Restringir una sesión no afecta al resto."""
+    bus = MCPBus([FakeServer()])
+    bus.restrict_session("session-bloqueada", ["fake.echo"])
+
+    resultado = await bus.execute("fake.echo", {}, session_id="session-libre")
+
+    assert resultado.success is True
+
+
+@pytest.mark.asyncio
+async def test_mcp_bus_health_all_ok() -> None:
+    """health_check devuelve True para todos los servidores activos."""
+    bus = MCPBus([FakeServer(), SchemaServer()])
+
+    health = await bus.health_check()
+
+    assert health == {"fake": True, "schema": True}
+
+
+@pytest.mark.asyncio
+async def test_mcp_bus_health_partial_failure() -> None:
+    """health_check devuelve False para servidores que lanzan excepción."""
+
+    class BrokenServer:
+        """Servidor que registra bien pero falla en llamadas posteriores."""
+
+        nombre = "broken"
+
+        def __init__(self) -> None:
+            self._calls = 0
+
+        def herramientas(self) -> list[MCPTool]:
+            self._calls += 1
+            if self._calls > 1:
+                raise RuntimeError("Servidor roto en health check")
+            return [MCPTool(name="broken.noop", description="No-op")]
+
+        async def ejecutar(self, name: str, params: dict[str, Any]) -> dict:
+            return {}
+
+    bus = MCPBus([FakeServer(), BrokenServer()])
+
+    health = await bus.health_check()
+
+    assert health["fake"] is True
+    assert health["broken"] is False

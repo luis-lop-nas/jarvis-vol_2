@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-
-from mcp_servers.stdio_server import main
+from mcp_servers.fastmcp_server import main
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

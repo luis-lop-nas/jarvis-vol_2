@@ -48,6 +48,7 @@ class MCPBus:
         self._servers: dict[str, MCPServer] = {}
         self._tools: dict[str, MCPTool] = {}
         self._tool_servers: dict[str, MCPServer] = {}
+        self._session_restrictions: dict[str, set[str]] = {}
         self._audit = audit_log
         self._timeout = timeout_seconds
         for server in servers or []:
@@ -89,6 +90,55 @@ class MCPBus:
         """
         return tool_name in self._tools
 
+    def allow_tool(self, tool_name: str, session_id: str) -> bool:
+        """Indica si una sesión tiene permiso para usar una herramienta.
+
+        Por defecto todas las herramientas están permitidas. Solo devuelve
+        False si la sesión tiene restricciones explícitas sobre esa herramienta.
+
+        Args:
+            tool_name: Nombre canónico de la herramienta.
+            session_id: Identificador de la sesión que origina la llamada.
+
+        Returns:
+            `True` si la herramienta está permitida para la sesión.
+        """
+        if not session_id:
+            return True
+        restricted = self._session_restrictions.get(session_id, set())
+        return tool_name not in restricted
+
+    def restrict_session(self, session_id: str, tools: list[str]) -> None:
+        """Bloquea un conjunto de herramientas para una sesión concreta.
+
+        Args:
+            session_id: Identificador de sesión.
+            tools: Herramientas que esa sesión no podrá ejecutar.
+
+        Returns:
+            None.
+        """
+        existing = self._session_restrictions.setdefault(session_id, set())
+        existing.update(tools)
+
+    async def health_check(self) -> dict[str, bool]:
+        """Verifica disponibilidad de cada servidor registrado.
+
+        Llama a herramientas() en cada servidor; si lanza excepción,
+        el servidor se considera no disponible.
+
+        Returns:
+            Diccionario {nombre_servidor: disponible} para todos los servidores.
+        """
+        results: dict[str, bool] = {}
+        for nombre, server in self._servers.items():
+            try:
+                herramientas = server.herramientas()
+                results[nombre] = len(herramientas) > 0
+            except Exception:
+                results[nombre] = False
+        return results
+
     async def execute(
         self,
         tool_name: str,
@@ -120,6 +170,12 @@ class MCPBus:
             return MCPResult(
                 success=False,
                 error=f"Herramienta MCP no registrada: {request.tool_name}",
+                tool_name=request.tool_name,
+            )
+        if not self.allow_tool(request.tool_name, request.session_id):
+            return MCPResult(
+                success=False,
+                error=f"Herramienta no autorizada para esta sesión: {request.tool_name}",
                 tool_name=request.tool_name,
             )
         if tool.requires_confirmation and not request.requires_confirmation:

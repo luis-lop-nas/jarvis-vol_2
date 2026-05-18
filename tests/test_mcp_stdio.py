@@ -113,3 +113,61 @@ def test_all_mcp_tools_expose_protocol_schema() -> None:
     assert herramientas
     assert all(tool.input_schema.get("type") == "object" for tool in herramientas)
     assert all("additionalProperties" in tool.input_schema for tool in herramientas)
+
+
+# ---------------------------------------------------------------------------
+# Tests FastMCP
+# ---------------------------------------------------------------------------
+
+
+def test_fastmcp_server_can_be_built() -> None:
+    """El servidor FastMCP se construye correctamente desde el bus."""
+    from mcp_servers.fastmcp_server import _FASTMCP_AVAILABLE, _build_server
+
+    if not _FASTMCP_AVAILABLE:
+        import pytest
+
+        pytest.skip("fastmcp no instalado")
+
+    bus = MCPBus([EchoServer()])
+    server = _build_server(bus)
+
+    assert server is not None
+
+
+@pytest.mark.asyncio
+async def test_fastmcp_handler_executes_via_bus() -> None:
+    """El handler FastMCP delega la ejecución al bus MCP."""
+    from mcp_servers.fastmcp_server import _make_handler
+
+    bus = MCPBus([EchoServer()])
+    tool = MCPTool(
+        name="echo.hola",
+        description="Devuelve el texto recibido.",
+        input_schema=schema_objeto({"texto": campo("string", "Texto")}, ["texto"]),
+    )
+
+    handler = _make_handler(bus, tool)
+    result = await handler(texto="mundo")
+
+    assert result["texto"] == "mundo"
+
+
+def test_fastmcp_handler_signature_matches_schema() -> None:
+    """El handler FastMCP tiene __signature__ con los parámetros del inputSchema."""
+    import inspect as _inspect
+
+    from mcp_servers.fastmcp_server import _make_handler
+
+    bus = MCPBus([EchoServer()])
+    tool = MCPTool(
+        name="echo.hola",
+        description="Devuelve el texto recibido.",
+        input_schema=schema_objeto({"texto": campo("string", "Texto")}, ["texto"]),
+    )
+
+    handler = _make_handler(bus, tool)
+    sig = _inspect.signature(handler)
+
+    assert "texto" in sig.parameters
+    assert sig.parameters["texto"].annotation is str

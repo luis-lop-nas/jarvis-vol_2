@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     sandbox_enabled: bool = Field(default=True)
     security_docker_sandbox_enabled: bool = Field(default=False)
 
+    # --- MCP / Observabilidad ---
+    mcp_otel_enabled: bool = Field(default=False)
+
     # --- Identidad ---
     usuario_nombre: str = Field(default="Usuario")
     zona_horaria: str = Field(default="Europe/Madrid")

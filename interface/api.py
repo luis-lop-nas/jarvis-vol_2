@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 if TYPE_CHECKING:
+    from core.mcp_bus import MCPBus
     from security.audit_log import AuditLog
     from security.confirmation import ConfirmationManager
 
@@ -140,6 +141,7 @@ def crear_servidor(
     manager: ConnectionManager,
     confirmation_manager: ConfirmationManager | None = None,
     audit_log: AuditLog | None = None,
+    bus: MCPBus | None = None,
 ) -> FastAPI:
     """Construye la aplicación FastAPI completa con todas las rutas."""
 
@@ -312,6 +314,13 @@ def crear_servidor(
         except Exception:
             pass
 
+        mcp_health: dict[str, bool] = {}
+        if bus is not None:
+            try:
+                mcp_health = await bus.health_check()
+            except Exception:
+                pass
+
         return SystemStatus(
             api_running=True,
             chroma_connected=chroma_ok,
@@ -319,6 +328,7 @@ def crear_servidor(
             available_models=models,
             ram_available_gb=ram_gb,
             onepassword_available=op_ok,
+            mcp_health=mcp_health,
         )
 
     # ------------------------------------------------------------------

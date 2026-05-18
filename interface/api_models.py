@@ -57,3 +57,4 @@ class SystemStatus(BaseModel):
     available_models: list[str]
     ram_available_gb: float
     onepassword_available: bool
+    mcp_health: dict[str, bool] = Field(default_factory=dict)

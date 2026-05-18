@@ -22,6 +22,19 @@
 
 ## ✅ Completado
 
+### Migración FastMCP + mejoras MCP (2026-05-19)
+- **`mcp_servers/fastmcp_server.py`** (nuevo) — Servidor FastMCP sobre el bus interno. `_make_handler()` usa `inspect.Signature` para derivar la firma Python del `inputSchema` de cada herramienta sin `exec()`; `_build_server()` registra todas las herramientas vía `mcp.add_tool()`. Fallback automático a `stdio_server.py` si fastmcp no está instalado.
+- **OTel condicional** — `_otel_wrap()` activo solo si `mcp_otel_enabled=True` y `fastmcp>=3.0.0`. Emite spans JSON Lines a stderr (no interfiere con el protocolo stdio en stdout). Campos: `tool_name`, `session_id`, `duration_ms`, `success`. Sin parámetros (datos potencialmente sensibles).
+- **`mcp_servers/__main__.py`** — Actualizado para usar `fastmcp_server.main()`. `stdio_server.py` se mantiene como fallback compatible.
+- **`core/mcp_bus.py`** — Scoping de herramientas por sesión: `allow_tool(tool_name, session_id)`, `restrict_session(session_id, tools)`, `_session_restrictions: dict[str, set[str]]`. `execute()` verifica `allow_tool()` antes de ejecutar → MCPResult con error "no autorizada". También `health_check()` → `dict[str, bool]` llamando `herramientas()` en cada servidor.
+- **`interface/api.py`** — `crear_servidor()` acepta `bus: MCPBus | None`. GET `/status` llama `bus.health_check()` e incluye `mcp_health: dict[str, bool]` en la respuesta.
+- **`interface/api_models.py`** — `SystemStatus` añade `mcp_health: dict[str, bool] = {}`.
+- **`config/settings.py`** — `mcp_otel_enabled: bool = False`.
+- **`requirements.txt`** — `fastmcp>=2.0.0`.
+- **ADRs**: ADR-72 (FastMCP como transporte, MCPBus intacto), ADR-73 (OTel a stderr, no stdout, para compatibilidad con stdio MCP), ADR-74 (scoping sesión con dict[session_id, set[tool_name]]), ADR-75 (health_check llama herramientas() — falla = servidor no disponible).
+- **Tests añadidos**: `test_mcp_bus_tool_allowed_default`, `test_mcp_bus_tool_restricted`, `test_mcp_bus_restriction_does_not_affect_other_sessions`, `test_mcp_bus_health_all_ok`, `test_mcp_bus_health_partial_failure` (en `test_mcp_bus.py`); `test_fastmcp_server_can_be_built`, `test_fastmcp_handler_executes_via_bus`, `test_fastmcp_handler_signature_matches_schema` (en `test_mcp_stdio.py`).
+- **Suite completa: 266/266 verde (+ 1 skip fastmcp no instalado) en ~20s**.
+
 ### Fase 1 (2026-05-05)
 - Estructura completa de paquetes en `~/Projects/jarvis`, después migrada a `jarvis-vol_2`.
 - 59 archivos esqueleto con tipado estricto, docstrings en español.
@@ -200,6 +213,7 @@ _(nada activo — Fase 10 completada 2026-05-18)_
 2. **Distribución del overlay** — `interface/swiftui/build.sh` ya preparado. Firma y notarización. Auto-update system.
 3. **Dashboard web** — panel `http://localhost:8765` con historial de sesiones, logs y estado del sistema.
 4. ~~**Scoping de confirmaciones por sesión**~~ — resuelto 2026-05-19 (hallazgo crítico del auditor).
+5. ~~**Migración FastMCP + scoping herramientas + health check**~~ — resuelto 2026-05-19.
 
 ---
 
@@ -297,6 +311,12 @@ _(nada activo — Fase 10 completada 2026-05-18)_
 - ADR-11: **Detección de internet por TCP a `1.1.1.1:53` cacheada 30 s** — evita un syscall por cada `route()`.
 - ADR-12: **`complete_with_thinking()` solo en Kimi**; en DeepSeek el modo thinking se activa con `complejidad>=0.65` en `complete()`. Dos APIs distintas porque son dos comportamientos distintos.
 - ADR-13: **Sin tarifas inventadas** — solo DeepSeek expone `cost_usd` real. Kimi/OpenRouter dejan `cost_usd=0.0`.
+
+### 2026-05-19 (Migración FastMCP + mejoras MCP)
+- ADR-72: **FastMCP como transporte, MCPBus intacto** — `fastmcp_server.py` reemplaza solo la capa stdio. El bus, la auditoría, el scoping de confirmaciones y la sanitización de secretos no cambian. `stdio_server.py` se mantiene como fallback si `fastmcp` no está instalado.
+- ADR-73: **OTel a stderr, no stdout** — en modo stdio MCP, stdout es el canal de protocolo JSON-RPC. Los spans OTel se emiten a stderr en formato JSON Lines. Solo activo con `mcp_otel_enabled=True` y `fastmcp>=3.0.0`.
+- ADR-74: **Scoping de sesión con `dict[session_id, set[tool_name]]`** — `_session_restrictions` en MCPBus. Por defecto vacío (sin restricciones). `restrict_session()` añade; no hay método de eliminar restricciones (las sesiones son efímeras). `allow_tool()` con `session_id=""` devuelve siempre True (compatibilidad con callers sin sesión).
+- ADR-75: **`health_check()` llama `herramientas()` por servidor** — es una llamada inofensiva (solo introspección). Si lanza excepción → `False`. Si devuelve lista vacía → `False`. Sin timeout adicional porque `herramientas()` es síncrono y no hace I/O.
 
 ---
 
