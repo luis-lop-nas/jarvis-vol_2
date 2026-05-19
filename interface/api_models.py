@@ -8,9 +8,9 @@ from pydantic import BaseModel, Field
 class ChatRequest(BaseModel):
     """Petición de conversación."""
 
-    message: str
-    session_id: str | None = None
-    attachments: list[str] = Field(default_factory=list)
+    message: str = Field(max_length=8192)
+    session_id: str | None = Field(None, max_length=64)
+    attachments: list[str] = Field(default_factory=list, max_length=10)
 
 
 class ChatResponse(BaseModel):
@@ -23,9 +23,9 @@ class ChatResponse(BaseModel):
 class ConfirmRequest(BaseModel):
     """Confirmación o rechazo de una acción pendiente."""
 
-    action_id: str
+    action_id: str = Field(max_length=128)
     confirmed: bool
-    request_id: str | None = None  # ID de la confirmación de seguridad (security/confirmation.py)
+    request_id: str | None = Field(None, max_length=128)
 
 
 class AgentUpdate(BaseModel):
@@ -59,3 +59,23 @@ class SystemStatus(BaseModel):
     onepassword_available: bool
     mcp_health: dict[str, bool] = Field(default_factory=dict)
     total_cost_usd: float = 0.0
+
+
+class SkillInfo(BaseModel):
+    """Información pública de un skill registrado."""
+
+    nombre: str
+    descripcion: str
+    version: str
+    autor: str
+    enabled: bool
+    herramientas: list[str]
+    riesgos: list[str]
+    ejemplos: int
+
+
+class SkillsResponse(BaseModel):
+    """Respuesta del endpoint GET /skills."""
+
+    total: int
+    skills: list[SkillInfo]

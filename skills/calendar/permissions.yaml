@@ -1,0 +1,69 @@
+nombre: calendar
+descripcion: Acceso al Calendario de macOS para listar, crear y eliminar eventos
+version: "1.0.0"
+autor: JARVIS
+
+riesgos:
+  - calendar.listar expone eventos privados del usuario
+  - calendar.crear puede generar duplicados si se llama varias veces
+  - calendar.eliminar es irreversible
+
+herramientas:
+  - nombre: calendar.listar
+    descripcion: Lista eventos del calendario de los próximos N días
+    nivel_riesgo: low
+    permisos_requeridos:
+      - AUTOMATION
+    parametros:
+      dias:
+        type: integer
+        description: Número de días a partir de hoy (default 7)
+        required: false
+      calendario:
+        type: string
+        description: Nombre del calendario a consultar (vacío = todos)
+        required: false
+
+  - nombre: calendar.crear
+    descripcion: Crea un nuevo evento en el calendario de macOS
+    nivel_riesgo: medium
+    requiere_confirmacion: true
+    permisos_requeridos:
+      - AUTOMATION
+    parametros:
+      titulo:
+        type: string
+        description: Título del evento
+        required: true
+      fecha:
+        type: string
+        description: Fecha del evento en formato YYYY-MM-DD
+        required: true
+      hora_inicio:
+        type: string
+        description: Hora de inicio en formato HH:MM
+        required: true
+      hora_fin:
+        type: string
+        description: Hora de fin en formato HH:MM
+        required: true
+      calendario:
+        type: string
+        description: Nombre del calendario destino (default primero disponible)
+        required: false
+      notas:
+        type: string
+        description: Notas adicionales del evento
+        required: false
+
+  - nombre: calendar.eliminar
+    descripcion: Elimina un evento del calendario por su ID
+    nivel_riesgo: high
+    requiere_confirmacion: true
+    permisos_requeridos:
+      - AUTOMATION
+    parametros:
+      evento_id:
+        type: string
+        description: ID del evento (obtenido con calendar.listar)
+        required: true

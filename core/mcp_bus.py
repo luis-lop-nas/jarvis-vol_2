@@ -16,6 +16,7 @@ from mcp_servers.base import (
     validar_parametros,
 )
 from security.audit_log import AuditLog
+from security.permission_manager import PermissionManager
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class MCPBus:
         *,
         audit_log: AuditLog | None = None,
         timeout_seconds: float = 120.0,
+        permission_manager: PermissionManager | None = None,
     ) -> None:
         self._servers: dict[str, MCPServer] = {}
         self._tools: dict[str, MCPTool] = {}
@@ -51,6 +53,7 @@ class MCPBus:
         self._session_restrictions: dict[str, set[str]] = {}
         self._audit = audit_log
         self._timeout = timeout_seconds
+        self._permission_manager = permission_manager
         for server in servers or []:
             self.register(server)
 
@@ -178,6 +181,29 @@ class MCPBus:
                 error=f"Herramienta no autorizada para esta sesión: {request.tool_name}",
                 tool_name=request.tool_name,
             )
+
+        # Verificación centralizada de políticas de permisos
+        if self._permission_manager is not None:
+            perm = await self._permission_manager.verificar(
+                request.tool_name, request.params, request.session_id
+            )
+            if not perm.permitido:
+                return MCPResult(
+                    success=False,
+                    error=f"PermissionError: {perm.motivo}",
+                    side_effects=tool.side_effects,
+                    tool_name=request.tool_name,
+                )
+            if perm.dry_run:
+                duracion = int((time.monotonic() - inicio) * 1000)
+                return MCPResult(
+                    success=True,
+                    data={"dry_run": True, "herramienta": request.tool_name, "params": _sanitize(request.params)},
+                    duration_ms=duracion,
+                    side_effects=tool.side_effects,
+                    tool_name=request.tool_name,
+                )
+
         if tool.requires_confirmation and not request.requires_confirmation:
             return MCPResult(
                 success=False,

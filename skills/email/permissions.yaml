@@ -1,0 +1,56 @@
+nombre: email
+descripcion: Lectura y envío de correos via la app Mail de macOS
+version: "1.0.0"
+autor: JARVIS
+
+riesgos:
+  - mail.enviar envía mensajes reales — siempre requiere confirmación humana
+  - mail.eliminar es irreversible
+  - mail.leer accede al buzón completo del usuario
+
+herramientas:
+  - nombre: mail.leer
+    descripcion: Lee correos del buzón de entrada
+    nivel_riesgo: medium
+    puede_usar_red: true
+    permisos_requeridos:
+      - AUTOMATION
+    parametros:
+      limite:
+        type: integer
+        description: Número máximo de correos a leer
+        required: false
+
+  - nombre: mail.enviar
+    descripcion: Envía un correo electrónico
+    nivel_riesgo: high
+    requiere_confirmacion: true
+    puede_usar_red: true
+    permisos_requeridos:
+      - AUTOMATION
+    parametros:
+      destinatario:
+        type: string
+        description: Dirección de email del destinatario
+        required: true
+      asunto:
+        type: string
+        description: Asunto del correo
+        required: true
+      cuerpo:
+        type: string
+        description: Cuerpo del correo (texto plano o HTML)
+        required: true
+
+  - nombre: mail.eliminar
+    descripcion: Elimina un correo permanentemente del buzón
+    nivel_riesgo: high
+    requiere_confirmacion: true
+    puede_usar_red: true
+    permisos_requeridos:
+      - AUTOMATION
+    parametros:
+      mensaje_id:
+        type: string
+        description: ID del mensaje a eliminar
+        required: true

@@ -108,12 +108,23 @@ class Planner:
         print(plan.pasos)
     """
 
-    def __init__(self, modelo: _ModelBase) -> None:
+    def __init__(self, modelo: _ModelBase, *, skill_registry: Any = None) -> None:
         self._modelo = modelo
+        self._skill_registry = skill_registry
         try:
             self._prompt_sistema = RUTA_PROMPT.read_text(encoding="utf-8")
         except FileNotFoundError:
             self._prompt_sistema = "Eres el planificador de JARVIS. Responde solo con JSON válido."
+
+    def _herramientas_validas(self) -> frozenset[str]:
+        if self._skill_registry is not None:
+            return _HERRAMIENTAS_VALIDAS | self._skill_registry.herramientas_validas()
+        return _HERRAMIENTAS_VALIDAS
+
+    def _herramientas_confirmacion(self) -> frozenset[str]:
+        if self._skill_registry is not None:
+            return _HERRAMIENTAS_CONFIRMACION | self._skill_registry.herramientas_confirmacion()
+        return _HERRAMIENTAS_CONFIRMACION
 
     async def plan(
         self,
@@ -213,10 +224,10 @@ class Planner:
                 errores.append(f"ID duplicado: {paso.id}")
             ids_vistos.add(paso.id)
 
-            if paso.herramienta not in _HERRAMIENTAS_VALIDAS:
+            if paso.herramienta not in self._herramientas_validas():
                 errores.append(f"Herramienta desconocida en '{paso.id}': {paso.herramienta}")
 
-            if paso.herramienta in _HERRAMIENTAS_CONFIRMACION and not paso.requiere_confirmacion:
+            if paso.herramienta in self._herramientas_confirmacion() and not paso.requiere_confirmacion:
                 errores.append(
                     f"Paso '{paso.id}' usa '{paso.herramienta}' sin requiere_confirmacion=True"
                 )

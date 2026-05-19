@@ -1,0 +1,50 @@
+nombre: terminal
+descripcion: Ejecución de comandos de shell y código Python en el sandbox de JARVIS
+version: "1.0.0"
+autor: JARVIS
+
+riesgos:
+  - Todas las operaciones de terminal tienen riesgo HIGH
+  - El sandbox bloquea comandos destructivos pero no puede garantizar seguridad total
+  - terminal.python permite ejecución de código arbitrario en el proceso de JARVIS
+
+herramientas:
+  - nombre: terminal.ejecutar
+    descripcion: Ejecuta un comando de shell en el sandbox de JARVIS
+    nivel_riesgo: high
+    requiere_confirmacion: true
+    puede_modificar_archivos: true
+    puede_usar_red: true
+    parametros:
+      comando:
+        type: string
+        description: Comando de shell a ejecutar
+        required: true
+      timeout:
+        type: integer
+        description: Timeout en segundos (default 30)
+        required: false
+
+  - nombre: terminal.python
+    descripcion: Ejecuta código Python en el sandbox de JARVIS
+    nivel_riesgo: high
+    requiere_confirmacion: true
+    puede_modificar_archivos: true
+    puede_usar_red: true
+    parametros:
+      codigo:
+        type: string
+        description: Código Python a ejecutar
+        required: true
+
+  - nombre: terminal.transmitir
+    descripcion: Transmite un comando interactivo al terminal con streaming de output
+    nivel_riesgo: high
+    requiere_confirmacion: true
+    puede_modificar_archivos: true
+    puede_usar_red: true
+    parametros:
+      comando:
+        type: string
+        description: Comando a transmitir
+        required: true

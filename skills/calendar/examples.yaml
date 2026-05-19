@@ -1,0 +1,25 @@
+- tarea: Muéstrame los eventos de la próxima semana
+  herramienta: calendar.listar
+  parametros:
+    dias: 7
+
+- tarea: Lista solo los eventos del calendario "Trabajo" hoy
+  herramienta: calendar.listar
+  parametros:
+    dias: 1
+    calendario: Trabajo
+
+- tarea: Añade una reunión de JARVIS mañana de 10 a 11
+  herramienta: calendar.crear
+  parametros:
+    titulo: Reunión JARVIS
+    fecha: "2026-05-20"
+    hora_inicio: "10:00"
+    hora_fin: "11:00"
+    calendario: Trabajo
+    notas: Revisión semanal del sistema
+
+- tarea: Elimina el evento con ID abc123
+  herramienta: calendar.eliminar
+  parametros:
+    evento_id: abc123

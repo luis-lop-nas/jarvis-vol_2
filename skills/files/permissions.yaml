@@ -1,0 +1,97 @@
+nombre: files
+descripcion: Acceso al sistema de archivos dentro del sandbox de JARVIS
+version: "1.0.0"
+autor: JARVIS
+
+riesgos:
+  - filesystem.eliminar es irreversible
+  - Todas las rutas están restringidas al sandbox de JARVIS
+  - filesystem.escribir sobreescribe archivos existentes sin aviso adicional
+
+herramientas:
+  - nombre: filesystem.leer
+    descripcion: Lee un archivo de texto del sandbox
+    nivel_riesgo: low
+    parametros:
+      ruta:
+        type: string
+        description: Ruta del archivo a leer
+        required: true
+
+  - nombre: filesystem.listar
+    descripcion: Lista el contenido de un directorio del sandbox
+    nivel_riesgo: low
+    parametros:
+      ruta:
+        type: string
+        description: Ruta del directorio
+        required: true
+
+  - nombre: filesystem.buscar
+    descripcion: Busca archivos por nombre o patrón glob dentro del sandbox
+    nivel_riesgo: low
+    parametros:
+      patron:
+        type: string
+        description: Patrón glob de búsqueda (p.ej. "*.py")
+        required: true
+      directorio:
+        type: string
+        description: Directorio raíz de búsqueda
+        required: false
+
+  - nombre: filesystem.escribir
+    descripcion: Escribe o sobreescribe un archivo dentro del sandbox
+    nivel_riesgo: medium
+    requiere_confirmacion: true
+    puede_modificar_archivos: true
+    parametros:
+      ruta:
+        type: string
+        description: Ruta destino del archivo
+        required: true
+      contenido:
+        type: string
+        description: Contenido a escribir
+        required: true
+
+  - nombre: filesystem.mover
+    descripcion: Mueve un archivo a otra ruta dentro del sandbox
+    nivel_riesgo: medium
+    requiere_confirmacion: true
+    puede_modificar_archivos: true
+    parametros:
+      origen:
+        type: string
+        description: Ruta de origen
+        required: true
+      destino:
+        type: string
+        description: Ruta de destino
+        required: true
+
+  - nombre: filesystem.copiar
+    descripcion: Copia un archivo a otra ruta dentro del sandbox
+    nivel_riesgo: medium
+    requiere_confirmacion: true
+    puede_modificar_archivos: true
+    parametros:
+      origen:
+        type: string
+        description: Ruta de origen
+        required: true
+      destino:
+        type: string
+        description: Ruta de destino
+        required: true
+
+  - nombre: filesystem.eliminar
+    descripcion: Elimina permanentemente un archivo o directorio del sandbox
+    nivel_riesgo: high
+    requiere_confirmacion: true
+    puede_modificar_archivos: true
+    parametros:
+      ruta:
+        type: string
+        description: Ruta del archivo o directorio a eliminar
+        required: true

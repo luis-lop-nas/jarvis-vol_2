@@ -544,3 +544,234 @@ class TestAgente:
             if u.tipo == "error" and "Loop detectado" in u.mensaje
         ]
         assert error_guard, f"Se esperaba error de runaway guard. Updates: {[u.tipo for u in actualizaciones]}"
+
+
+# ---------------------------------------------------------------------------
+# Nuevos tests: state machine, trazabilidad, timeout, reintentos, checkpoint
+# ---------------------------------------------------------------------------
+
+
+class TestAgenteFaseYTraza:
+
+    @pytest.mark.asyncio
+    async def test_fase_transitions_happy_path(self) -> None:
+        """run() actualiza 'fase' a través de PLAN → EXECUTE_TOOL → DONE."""
+        from core.agent import AgentFase
+
+        agente = _make_agente(
+            herramientas={"filesystem.leer": AsyncMock(return_value="ok")}
+        )
+        agente._reflector.reflect = AsyncMock(return_value=DecisionReflexion.CONTINUAR)
+        agente._reflector.evaluate_task_completion = MagicMock(side_effect=[False, True])
+        agente._reflector.generate_summary = AsyncMock(return_value="Listo.")
+
+        fases = []
+        async for u in agente.run("tarea simple"):
+            fases.append(u.fase)
+
+        assert AgentFase.PLAN in fases
+        assert AgentFase.EXECUTE_TOOL in fases
+        assert AgentFase.DONE in fases
+
+    @pytest.mark.asyncio
+    async def test_traza_en_actualizacion_final(self) -> None:
+        """El update 'listo' incluye la traza con al menos una entrada de EXECUTE_TOOL."""
+        from core.agent import AgentFase
+
+        agente = _make_agente(
+            herramientas={"filesystem.leer": AsyncMock(return_value="contenido")}
+        )
+        agente._reflector.reflect = AsyncMock(return_value=DecisionReflexion.CONTINUAR)
+        agente._reflector.evaluate_task_completion = MagicMock(side_effect=[False, True])
+        agente._reflector.generate_summary = AsyncMock(return_value="Hecho.")
+
+        actualizaciones = []
+        async for u in agente.run("lee algo"):
+            actualizaciones.append(u)
+
+        final = actualizaciones[-1]
+        assert final.tipo == "listo"
+        assert final.traza is not None and len(final.traza) > 0
+        fases_traza = [e["fase"] for e in final.traza]
+        assert AgentFase.EXECUTE_TOOL in fases_traza
+
+    @pytest.mark.asyncio
+    async def test_fase_error_en_timeout(self) -> None:
+        """Cuando el timeout global expira el update tiene fase=ERROR."""
+        import core.agent as agent_module
+        from core.agent import AgentFase
+
+        agente = _make_agente()
+        agente._reflector.reflect = AsyncMock(return_value=DecisionReflexion.CONTINUAR)
+        agente._reflector.evaluate_task_completion = MagicMock(return_value=False)
+
+        with patch.object(agent_module, "TIMEOUT_TAREA_GLOBAL", -1.0):
+            actualizaciones = []
+            async for u in agente.run("tarea infinita"):
+                actualizaciones.append(u)
+
+        error = next(u for u in actualizaciones if u.tipo == "error")
+        assert error.fase == AgentFase.ERROR
+
+    @pytest.mark.asyncio
+    async def test_fase_cancelled_al_cancelar(self) -> None:
+        """Cuando se cancela el update de error tiene fase=CANCELLED."""
+        from core.agent import AgentFase
+
+        agente = _make_agente()
+        agente._reflector.reflect = AsyncMock(return_value=DecisionReflexion.CONTINUAR)
+        agente._reflector.evaluate_task_completion = MagicMock(return_value=False)
+
+        sid = "sesion-fase-cancel"
+        actualizaciones: list = []
+
+        async def _ejecutar():
+            async for u in agente.run("tarea", session_id=sid):
+                actualizaciones.append(u)
+
+        task = asyncio.create_task(_ejecutar())
+        await asyncio.sleep(0)
+        await agente.cancel(sid)
+        await asyncio.wait_for(task, timeout=3.0)
+
+        error = next((u for u in actualizaciones if u.tipo == "error"), None)
+        assert error is not None
+        assert error.fase == AgentFase.CANCELLED
+
+    @pytest.mark.asyncio
+    async def test_reintentos_agotados_abortan(self) -> None:
+        """Cuando reintentos > MAX_REINTENTOS el loop termina con tipo=error."""
+        import core.agent as agent_module
+
+        agente = _make_agente(
+            herramientas={"filesystem.leer": AsyncMock(return_value="ok")}
+        )
+        agente._reflector.reflect = AsyncMock(return_value=DecisionReflexion.REINTENTAR)
+        agente._reflector.evaluate_task_completion = MagicMock(return_value=False)
+
+        with patch.object(agent_module, "MAX_REINTENTOS", 1):
+            actualizaciones = []
+            async for u in agente.run("tarea con reintentos"):
+                actualizaciones.append(u)
+                if len(actualizaciones) > 30:
+                    break
+
+        assert any(u.tipo == "error" for u in actualizaciones)
+
+    @pytest.mark.asyncio
+    async def test_replan_traza_entrada(self) -> None:
+        """Tras REPLANIFICAR la traza contiene una entrada de fase REPLAN."""
+        from core.agent import AgentFase
+
+        agente = _make_agente(
+            herramientas={"filesystem.leer": AsyncMock(return_value="ok")}
+        )
+        reflect_calls = [DecisionReflexion.REPLANIFICAR, DecisionReflexion.CONTINUAR]
+
+        agente._reflector.reflect = AsyncMock(side_effect=reflect_calls)
+        agente._reflector.evaluate_task_completion = MagicMock(side_effect=[False, False, True])
+        agente._reflector.explain_failure = AsyncMock(return_value="ruta incorrecta")
+        agente._reflector.generate_summary = AsyncMock(return_value="Replanificado y completado.")
+
+        # replan necesita devolver un plan válido
+        json_nuevo = """
+        {
+          "objetivo": "alternativa",
+          "pasos": [{"id": "alt1", "descripcion": "paso alternativo",
+                     "herramienta": "filesystem.leer", "parametros": {},
+                     "requiere_confirmacion": false, "depende_de": [],
+                     "duracion_estimada_ms": 100, "puede_fallar": false}]
+        }
+        """
+        from models.base import ModelResponse
+        agente._planner._modelo.complete = AsyncMock(
+            return_value=ModelResponse(content=json_nuevo, model="mock")
+        )
+
+        actualizaciones = []
+        async for u in agente.run("tarea con replan"):
+            actualizaciones.append(u)
+            if len(actualizaciones) > 30:
+                break
+
+        final = actualizaciones[-1]
+        if final.traza:
+            fases_traza = [e["fase"] for e in final.traza]
+            assert AgentFase.REPLAN in fases_traza
+
+    def test_estado_a_dict_serializable(self) -> None:
+        """estado_a_dict() produce un dict serializable a JSON."""
+        import json
+        from core.agent import AgentFase, estado_a_dict
+        from core.planner import PasoAccion, PlanEjecucion
+        from core.reflector import ResultadoPaso
+        from models.base import Mensaje
+
+        estado = {
+            "session_id": "test-123",
+            "current_task": "test",
+            "current_plan": PlanEjecucion(
+                tarea="test",
+                pasos=[PasoAccion(id="p1", descripcion="X", herramienta="filesystem.leer", parametros={})],
+            ),
+            "completed_steps": [ResultadoPaso(id_paso="p1", exito=True, duracion_ms=10)],
+            "failed_steps": [],
+            "messages": [Mensaje(rol="user", contenido="hola")],
+            "fase": AgentFase.DONE,
+            "traza": [{"fase": "done", "ts": "2026-01-01T00:00:00+00:00"}],
+        }
+        d = estado_a_dict(estado)
+        serializado = json.dumps(d)
+        assert '"test-123"' in serializado
+        assert '"done"' in serializado
+
+    @pytest.mark.asyncio
+    async def test_resume_desde_initial_state_usa_plan_existente(self) -> None:
+        """run(initial_state=...) con plan ya cargado salta la generación del plan."""
+        from core.agent import AgentFase, Agente
+        from core.planner import PasoAccion, PlanEjecucion
+        from memory.short_term import MemoriaCortoPlazo
+
+        herramienta_mock = AsyncMock(return_value="contenido restaurado")
+        agente = Agente(
+            planner=Planner(_mock_modelo()),
+            reflector=Reflector(_mock_modelo("continuar")),
+            memoria_corto=MemoriaCortoPlazo(),
+            memoria_episodica=_mock_memoria(),
+            auditoria=_mock_auditoria(),
+            herramientas={"filesystem.leer": herramienta_mock},
+        )
+        agente._reflector.reflect = AsyncMock(return_value=DecisionReflexion.CONTINUAR)
+        agente._reflector.evaluate_task_completion = MagicMock(side_effect=[False, True])
+        agente._reflector.generate_summary = AsyncMock(return_value="Reanudado.")
+
+        plan_existente = PlanEjecucion(
+            tarea="tarea restaurada",
+            pasos=[PasoAccion(id="r1", descripcion="leer", herramienta="filesystem.leer", parametros={})],
+        )
+        estado_guardado = {
+            "session_id": "restaurado",
+            "current_task": "tarea restaurada",
+            "current_plan": plan_existente,
+            "completed_steps": [],
+            "failed_steps": [],
+            "retry_count": 0,
+            "replan_count": 0,
+            "system_context": {},
+            "memory_context": "",
+            "waiting_for_user": False,
+            "paso_pendiente_confirmacion": None,
+            "abort_reason": None,
+            "indice_paso_actual": 0,
+            "tarea_completada": False,
+            "tool_call_history": [],
+            "fase": AgentFase.PLAN,
+            "traza": [],
+        }
+
+        actualizaciones = []
+        async for u in agente.run("tarea restaurada", initial_state=estado_guardado):
+            actualizaciones.append(u)
+
+        assert any(u.tipo == "listo" for u in actualizaciones)
+        herramienta_mock.assert_called_once()

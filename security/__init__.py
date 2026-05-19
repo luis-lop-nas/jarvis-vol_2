@@ -13,6 +13,13 @@ from security.confirmation import (
     ConfirmationResult,
     SecurityError,
 )
+from security.permission_manager import (
+    InjectionResult,
+    PermissionManager,
+    PermissionResult,
+    RiskLevel,
+    ToolPolicy,
+)
 from security.permissions import Permission, PermissionsManager, PermissionStatus
 from security.sandbox import CommandRisk, Sandbox, SandboxError, SandboxResult
 
@@ -40,10 +47,16 @@ __all__ = [
     "AuditLog",
     "AuditEntry",
     "AuditStats",
-    # permissions
+    # permissions (macOS)
     "PermissionsManager",
     "Permission",
     "PermissionStatus",
+    # permission_manager (por herramienta)
+    "PermissionManager",
+    "PermissionResult",
+    "ToolPolicy",
+    "RiskLevel",
+    "InjectionResult",
     # compat
     "AutenticadorLocal",
     "GestorConfirmacion",
@@ -58,3 +71,4 @@ sandbox: Sandbox | None = None
 confirmation_manager: ConfirmationManager | None = None
 audit_log: AuditLog | None = None
 permissions_manager: PermissionsManager | None = None
+permission_manager: PermissionManager | None = None

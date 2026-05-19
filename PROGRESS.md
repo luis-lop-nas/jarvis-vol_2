@@ -22,6 +22,38 @@
 
 ## ✅ Completado
 
+### Máquina de estados + trazabilidad en core/agent.py (2026-05-19)
+- **`AgentFase` (StrEnum)** — 11 estados explícitos: `INIT → PERCEIVE → PLAN → WAIT_CONFIRMATION → EXECUTE_TOOL → VERIFY → REFLECT → REPLAN → DONE / ERROR / CANCELLED`.
+- **`TrazaPaso` (Pydantic)** — Registro por transición: `ts`, `fase`, `paso_id`, `herramienta`, `memoria_tokens`, `razon`, `resultado_exito`, `duracion_ms`.
+- **`AgentState`** — Nuevos campos `fase: str` y `traza: list[dict]` (pre-serializados). Compatibles con `total=False` — no rompen código existente.
+- **`ActualizacionAgente`** — Nuevos campos `fase: str` (visible en streaming SSE/WS) y `traza: list[dict] | None` (poblado en el update final `"listo"`).
+- **`_transicion(estado, fase, **kw)`** — Helper que actualiza `fase` y appenda `TrazaPaso` en una operación atómica. Usado en todos los puntos de transición del loop.
+- **`estado_a_dict(estado)`** — Serialización completa a JSON-compatible; maneja Pydantic (`model_dump`) y dataclasses (`dataclasses.asdict`). Exportada para uso en `SessionStore`.
+- **Persistencia mejorada** — `run(initial_state=...)` preserva `fase` y `traza` al reanudar; si `initial_state.fase == "wait_confirmation"`, SessionStore puede reconocer dónde pausar.
+- **8 tests nuevos** en `TestAgenteFaseYTraza`: transiciones happy-path, traza en update final, fase ERROR en timeout, fase CANCELLED al cancelar, reintentos agotados abortan, traza con entrada REPLAN, `estado_a_dict` serializable, reanudación desde `initial_state` con plan existente.
+- **Suite: 462/462 verde + 1 skip** (telegram no instalado, preexistente).
+
+### Sistema de skills modular (2026-05-19)
+- **`skills/registry.py`** — `ToolDecl` (Pydantic): declaración de herramienta con nivel_riesgo, confirmación, capacidades, permisos macOS. `to_policy()` convierte a `ToolPolicy`. `SkillManifest` (Pydantic): manifiesto completo leído de `permissions.yaml`. `SkillRegistry.cargar_directorio()` descubre y carga skills; `_importar_tools()` usa `importlib` para cargar callables de `tools.py`. Métodos: `registrar_en_permission_manager()`, `herramientas_validas()`, `herramientas_confirmacion()`, `tools_adicionales()`, `listar()`, `get()`.
+- **`skills/__init__.py`** — Exporta `Skill`, `SkillManifest`, `SkillRegistry`, `ToolDecl`.
+- **5 skills integrados**: `browser/`, `files/`, `email/`, `terminal/` (tools via MCPBus), `calendar/` (tools en `tools.py` con osascript macOS — `calendar.listar`, `calendar.crear`, `calendar.eliminar`).
+- **Cada skill declara**: `SKILL.md` (docs legibles), `permissions.yaml` (manifiesto declarativo), `examples.yaml` (ejemplos), `tools.py` (callables Python), `tests/` (tests del skill).
+- **`core/planner.py`** — `Planner.__init__` acepta `skill_registry: Any | None`. Métodos `_herramientas_validas()` y `_herramientas_confirmacion()` combinan frozensets estáticos con los del registry. `validate_plan()` usa los métodos de instancia (no las constantes del módulo).
+- **`core/agent.py`** — Constructor acepta `skill_registry: Any | None`. `__init__` llama `skill_registry.tools_adicionales()` y los incorpora a `self._herramientas` automáticamente.
+- **`interface/api.py`** — `crear_servidor()` acepta `skill_registry`. Nuevo endpoint `GET /skills` (sin auth) devuelve `SkillsResponse`.
+- **`interface/api_models.py`** — `SkillInfo(BaseModel)` + `SkillsResponse(BaseModel)` añadidos.
+- **ADRs implícitos**: skills como capa declarativa sobre MCPBus (no reemplazo), calendar como skill con implementación propia (osascript), registry combina herramientas estáticas + skills (backward compat), GET /skills sin auth (info pública, no sensible).
+- **Tests**: `tests/test_skills.py` (35 tests), más tests en `skills/*/tests/` (15 tests adicionales). **50/50 verde en 0.76s**. Suite completa: **425/429 verde + 1 skip** (3 fallos pre-existentes: telegram no instalado).
+
+### PermissionManager — sistema de permisos por herramienta (2026-05-19)
+- **`security/permission_manager.py`** (nuevo) — `ToolPolicy` (Pydantic): cada herramienta declara `nivel_riesgo`, `requiere_confirmacion`, `requiere_biometria`, `puede_modificar_archivos`, `puede_usar_red`, `puede_leer_pantalla`, `puede_acceder_credenciales`, `permisos_requeridos`. `PermissionManager.verificar()` es el único punto de decisión: default-deny si no hay política, modo read-only, modo dry-run, verificación macOS, autenticación biométrica (CRITICAL siempre), confirmación humana. `verificar_inyeccion()` detecta 14 patrones de prompt injection y sanitiza el contenido. Políticas por defecto para las 43 herramientas registradas.
+- **`core/mcp_bus.py`** — Constructor acepta `permission_manager: PermissionManager | None`. `execute()` llama `verificar()` antes de ejecutar; si `dry_run=True` devuelve `MCPResult(success=True, data={"dry_run": True, ...})` sin tocar el servidor.
+- **`core/agent.py`** — Constructor acepta `permission_manager`. `_EXTERNAL_CONTENT_TOOLS` (8 herramientas: browser, filesystem, mail, comms). `_ejecutar_herramienta()` llama `verificar_inyeccion()` sobre el resultado de herramientas externas y sustituye el contenido sanitizado si hay inyección.
+- **`security/__init__.py`** — Exporta `PermissionManager`, `PermissionResult`, `ToolPolicy`, `RiskLevel`, `InjectionResult`, singleton `permission_manager`.
+- **ADRs**: ADR-109 (default-deny sin política), ADR-110 (dry-run en MCPBus, no en servidor), ADR-111 (injection detection en _ejecutar_herramienta, no en percibir), ADR-112 (CRITICAL siempre biometría aunque requiere_confirmacion=False).
+- **Tests**: `tests/test_permission_manager.py` — 42 tests: 6 políticas por defecto, 5 permitidas, 6 denegadas, 4 readonly, 5 dry-run, 13 injection, 3 integración MCPBus. **42/42 verde**.
+- **Suite completa: 319/319 verde + 1 skip (fastmcp no instalado)**.
+
 ### Migración FastMCP + mejoras MCP (2026-05-19)
 - **`mcp_servers/fastmcp_server.py`** (nuevo) — Servidor FastMCP sobre el bus interno. `_make_handler()` usa `inspect.Signature` para derivar la firma Python del `inputSchema` de cada herramienta sin `exec()`; `_build_server()` registra todas las herramientas vía `mcp.add_tool()`. Fallback automático a `stdio_server.py` si fastmcp no está instalado.
 - **OTel condicional** — `_otel_wrap()` activo solo si `mcp_otel_enabled=True` y `fastmcp>=3.0.0`. Emite spans JSON Lines a stderr (no interfiere con el protocolo stdio en stdout). Campos: `tool_name`, `session_id`, `duration_ms`, `success`. Sin parámetros (datos potencialmente sensibles).

@@ -18,7 +18,9 @@ from datetime import UTC, datetime
 from typing import Any, TypedDict
 from uuid import uuid4
 
-from pydantic import BaseModel as _PBase
+from enum import StrEnum
+
+from pydantic import BaseModel as _PBase, Field
 
 from config import settings
 from core.mcp_bus import MCPBus
@@ -30,6 +32,7 @@ from memory.short_term import MemoriaCortoPlazo
 from models.base import Mensaje
 from perception.verifier import ActionVerifier
 from security.audit_log import AuditLog
+from security.permission_manager import PermissionManager
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +45,18 @@ _RUNAWAY_VENTANA = 6   # pasos consecutivos que se inspeccionan
 _RUNAWAY_UMBRAL = 3    # veces que la misma (herramienta, params) dispara el guard
 
 # Herramientas que interactúan directamente con la pantalla y requieren verificación
+# Herramientas cuyo resultado puede contener contenido externo adversarial
+_EXTERNAL_CONTENT_TOOLS: frozenset[str] = frozenset({
+    "browser.leer",
+    "browser.abrir",
+    "filesystem.leer",
+    "mail.leer",
+    "imessage.leer",
+    "telegram.leer",
+    "whatsapp.leer",
+    "percepcion.accesibilidad",
+})
+
 _COMPUTER_ACTION_TOOLS: frozenset[str] = frozenset({
     "teclado.click",
     "teclado.doble_click",
@@ -63,6 +78,49 @@ _PARAMS_PROHIBIDOS: frozenset[str] = frozenset({
     "shell", "raiz_permitida", "sandbox_habilitado", "callback_confirmacion",
     "audit_log", "timeout", "confirmar", "env_extra", "cwd",
 })
+
+
+# ---------------------------------------------------------------------------
+# Estado del ciclo de vida
+# ---------------------------------------------------------------------------
+
+
+class AgentFase(StrEnum):
+    """Estado del ciclo de vida del agente en cada iteración del loop.
+
+    Ejemplo::
+        if estado["fase"] == AgentFase.WAIT_CONFIRMATION:
+            await agente.resume(sid, "si")
+    """
+
+    INIT = "init"
+    PERCEIVE = "perceive"
+    PLAN = "plan"
+    WAIT_CONFIRMATION = "wait_confirmation"
+    EXECUTE_TOOL = "execute_tool"
+    VERIFY = "verify"
+    REFLECT = "reflect"
+    REPLAN = "replan"
+    DONE = "done"
+    ERROR = "error"
+    CANCELLED = "cancelled"
+
+
+class TrazaPaso(_PBase):
+    """Registro de trazabilidad de una transición de estado.
+
+    Ejemplo::
+        t = TrazaPaso(fase=AgentFase.EXECUTE_TOOL, herramienta="filesystem.leer")
+    """
+
+    ts: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    fase: str
+    paso_id: str | None = None
+    herramienta: str | None = None
+    memoria_tokens: int = 0
+    razon: str | None = None
+    resultado_exito: bool | None = None
+    duracion_ms: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +147,9 @@ class AgentState(TypedDict, total=False):
     indice_paso_actual: int
     tarea_completada: bool
     tool_call_history: list[tuple[str, str]]  # buffer circular maxlen=_RUNAWAY_VENTANA
+    # Estado del ciclo de vida (AgentFase.value) y traza de ejecución
+    fase: str
+    traza: list[dict[str, Any]]
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +162,7 @@ class ActualizacionAgente(_PBase):
 
     Ejemplo::
         async for u in agente.run("organiza mis descargas"):
-            print(u.tipo, u.progreso)
+            print(u.tipo, u.fase, u.progreso)
     """
 
     tipo: str  # "pensando" | "actuando" | "esperando" | "listo" | "error"
@@ -109,6 +170,8 @@ class ActualizacionAgente(_PBase):
     resultado: ResultadoPaso | None = None
     mensaje: str = ""
     progreso: float = 0.0
+    fase: str = AgentFase.INIT
+    traza: list[dict[str, Any]] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +200,8 @@ class Agente:
         memoria: MemorySystem | None = None,
         mcp_bus: MCPBus | None = None,
         verifier: ActionVerifier | None = None,
+        permission_manager: PermissionManager | None = None,
+        skill_registry: Any | None = None,
     ) -> None:
         self._planner = planner
         self._reflector = reflector
@@ -144,10 +209,15 @@ class Agente:
         self._memoria_corto = memoria_corto or self._memoria._short_term
         self._memoria_episodica = memoria_episodica or self._memoria._episodic
         self._auditoria = auditoria
-        self._herramientas: dict[str, Callable[..., Any]] = herramientas or {}
+        self._herramientas: dict[str, Callable[..., Any]] = dict(herramientas or {})
         self._confirmar = callback_confirmacion or _denegar_por_defecto
         self._mcp_bus = mcp_bus
         self._verifier: ActionVerifier | None = verifier
+        self._permission_manager: PermissionManager | None = permission_manager
+        self._skill_registry: Any | None = skill_registry
+
+        if skill_registry is not None:
+            self._herramientas.update(skill_registry.tools_adicionales())
 
         # Sesiones activas. Cada sesión tiene su propio lock para evitar race conditions
         # entre run(), resume() y cancel() concurrentes.
@@ -204,6 +274,8 @@ class Agente:
                 "current_task": tarea,
                 "abort_reason": None,
                 "system_context": {},
+                "fase": initial_state.get("fase", AgentFase.INIT),
+                "traza": list(initial_state.get("traza", [])),
             }
         else:
             estado = {
@@ -223,6 +295,8 @@ class Agente:
                 "indice_paso_actual": 0,
                 "tarea_completada": False,
                 "tool_call_history": [],
+                "fase": AgentFase.INIT,
+                "traza": [],
             }
         self._estados[sid] = estado
         inicio = time.monotonic()
@@ -232,7 +306,13 @@ class Agente:
 
         try:
             # Percibir estado inicial del sistema
+            estado = _transicion(estado, AgentFase.PERCEIVE)
             estado = await self._percibir(estado)
+            estado = _transicion(
+                estado, AgentFase.PERCEIVE,
+                memoria_tokens=len(estado.get("memory_context", "")),
+                razon="estado del sistema y memoria cargados",
+            )
             self._estados[sid] = estado
 
             pasos_ejecutados = 0
@@ -241,8 +321,11 @@ class Agente:
             while True:
                 # Comprobaciones de límites y cancelación
                 if time.monotonic() - inicio >= TIMEOUT_TAREA_GLOBAL:
+                    estado = _transicion(estado, AgentFase.ERROR, razon="timeout global")
+                    self._estados[sid] = estado
                     yield ActualizacionAgente(
                         tipo="error",
+                        fase=AgentFase.ERROR,
                         mensaje=(
                             f"Timeout global: tarea superó "
                             f"{TIMEOUT_TAREA_GLOBAL:.0f}s."
@@ -252,25 +335,33 @@ class Agente:
                     return
 
                 if sid in self._cancelaciones:
-                    yield ActualizacionAgente(tipo="error", mensaje="Tarea cancelada.", progreso=1.0)
+                    estado = _transicion(estado, AgentFase.CANCELLED, razon="cancelado por usuario")
+                    self._estados[sid] = estado
+                    yield ActualizacionAgente(tipo="error", fase=AgentFase.CANCELLED, mensaje="Tarea cancelada.", progreso=1.0)
                     return
 
                 if estado.get("abort_reason"):
+                    estado = _transicion(estado, AgentFase.ERROR, razon=estado["abort_reason"])
+                    self._estados[sid] = estado
                     yield ActualizacionAgente(
-                        tipo="error", mensaje=estado["abort_reason"], progreso=1.0
+                        tipo="error", fase=AgentFase.ERROR, mensaje=estado.get("abort_reason", ""), progreso=1.0
                     )
                     return
 
                 if pasos_ejecutados >= MAX_PASOS:
+                    estado = _transicion(estado, AgentFase.ERROR, razon=f"límite {MAX_PASOS} pasos")
+                    self._estados[sid] = estado
                     yield ActualizacionAgente(
                         tipo="error",
+                        fase=AgentFase.ERROR,
                         mensaje=f"Límite de {MAX_PASOS} pasos alcanzado.",
                         progreso=1.0,
                     )
                     return
 
                 # Pensar: planificar si no hay plan, comprobar si está completo
-                yield ActualizacionAgente(tipo="pensando", mensaje="Analizando tarea…")
+                estado = _transicion(estado, AgentFase.PLAN, razon="generando o validando plan")
+                yield ActualizacionAgente(tipo="pensando", fase=AgentFase.PLAN, mensaje="Analizando tarea…")
                 estado = await self._pensar(estado)
                 self._estados[sid] = estado
 
@@ -297,15 +388,24 @@ class Agente:
 
                 # Confirmación requerida antes de actuar
                 if paso.requiere_confirmacion:
+                    estado = _transicion(
+                        estado, AgentFase.WAIT_CONFIRMATION,
+                        paso_id=paso.id, herramienta=paso.herramienta,
+                        razon="confirmación requerida por plan",
+                    )
+                    self._estados[sid] = estado
                     yield ActualizacionAgente(
                         tipo="esperando",
+                        fase=AgentFase.WAIT_CONFIRMATION,
                         paso=paso,
                         mensaje=f"Confirmación requerida: {paso.descripcion}",
                         progreso=progreso,
                     )
                     cancelado, aprobado = await self._esperar_usuario(sid, evento)
                     if cancelado:
-                        yield ActualizacionAgente(tipo="error", mensaje="Cancelado.", progreso=1.0)
+                        estado = _transicion(estado, AgentFase.CANCELLED, razon="cancelado durante confirmación")
+                        self._estados[sid] = estado
+                        yield ActualizacionAgente(tipo="error", fase=AgentFase.CANCELLED, mensaje="Cancelado.", progreso=1.0)
                         return
                     if not aprobado:
                         estado = {**estado, "abort_reason": f"Paso '{paso.id}' rechazado."}
@@ -333,8 +433,14 @@ class Agente:
                     return
 
                 # Actuar
+                estado = _transicion(
+                    estado, AgentFase.EXECUTE_TOOL,
+                    paso_id=paso.id, herramienta=paso.herramienta,
+                )
+                self._estados[sid] = estado
                 yield ActualizacionAgente(
                     tipo="actuando",
+                    fase=AgentFase.EXECUTE_TOOL,
                     paso=paso,
                     mensaje=paso.descripcion,
                     progreso=progreso,
@@ -367,6 +473,7 @@ class Agente:
 
                 # Verificación post-acción (computer_action tools con verifier activo)
                 if snapshot_pre is not None and self._verifier is not None:
+                    estado = _transicion(estado, AgentFase.VERIFY, paso_id=paso.id, herramienta=paso.herramienta)
                     try:
                         verif = await self._verifier.verify_action_result(
                             paso.herramienta, paso.descripcion, snapshot_pre
@@ -395,9 +502,15 @@ class Agente:
 
                 # Reflexionar
                 todos = completados_new + fallidos_new
+                estado = _transicion(
+                    estado, AgentFase.REFLECT,
+                    paso_id=paso.id, herramienta=paso.herramienta,
+                    resultado_exito=resultado.exito, duracion_ms=resultado.duracion_ms,
+                )
                 decision = await self._reflector.reflect(paso, resultado, plan, todos)
 
                 if decision == DecisionReflexion.CONTINUAR:
+                    estado = _transicion(estado, AgentFase.REFLECT, paso_id=paso.id, razon="continuar al siguiente paso")
                     estado = {**estado, "indice_paso_actual": indice + 1, "retry_count": 0}
 
                 elif decision == DecisionReflexion.REINTENTAR:
@@ -408,6 +521,7 @@ class Agente:
                             "abort_reason": f"Demasiados reintentos en paso '{paso.id}'.",
                         }
                     else:
+                        estado = _transicion(estado, AgentFase.REFLECT, paso_id=paso.id, razon=f"reintento {reintentos}/{MAX_REINTENTOS}")
                         estado = {**estado, "retry_count": reintentos}
 
                 elif decision == DecisionReflexion.REPLANIFICAR:
@@ -415,6 +529,10 @@ class Agente:
                     if replanes >= MAX_REPLANES:
                         estado = {**estado, "abort_reason": "Límite de replanes alcanzado."}
                     else:
+                        estado = _transicion(
+                            estado, AgentFase.REPLAN,
+                            paso_id=paso.id, razon=f"replanificación {replanes}/{MAX_REPLANES}: {resultado.error}",
+                        )
                         try:
                             # JARVIS-1 self-explain: genera análisis del fallo para enriquecer el replan
                             explicacion = await self._reflector.explain_failure(
@@ -439,21 +557,30 @@ class Agente:
                             estado = {**estado, "abort_reason": f"Error al replanificar: {exc}"}
 
                 elif decision == DecisionReflexion.ABORTAR:
+                    estado = _transicion(estado, AgentFase.ERROR, paso_id=paso.id, razon=f"abortado: {resultado.error}")
                     estado = {
                         **estado,
                         "abort_reason": f"Paso '{paso.id}' abortado: {resultado.error}",
                     }
 
                 elif decision == DecisionReflexion.ESPERAR_USUARIO:
+                    estado = _transicion(
+                        estado, AgentFase.WAIT_CONFIRMATION,
+                        paso_id=paso.id, razon="reflector solicita decisión del usuario",
+                    )
+                    self._estados[sid] = estado
                     yield ActualizacionAgente(
                         tipo="esperando",
+                        fase=AgentFase.WAIT_CONFIRMATION,
                         paso=paso,
                         mensaje="Esperando decisión del usuario.",
                         progreso=progreso,
                     )
                     cancelado, aprobado = await self._esperar_usuario(sid, evento)
                     if cancelado:
-                        yield ActualizacionAgente(tipo="error", mensaje="Cancelado.", progreso=1.0)
+                        estado = _transicion(estado, AgentFase.CANCELLED, razon="cancelado durante espera")
+                        self._estados[sid] = estado
+                        yield ActualizacionAgente(tipo="error", fase=AgentFase.CANCELLED, mensaje="Cancelado.", progreso=1.0)
                         return
                     if aprobado:
                         estado = {**estado, "indice_paso_actual": indice + 1, "retry_count": 0}
@@ -491,7 +618,15 @@ class Agente:
                 except Exception:
                     log.exception("Error guardando episodio en memoria")
 
-            yield ActualizacionAgente(tipo="listo", mensaje=resumen, progreso=1.0)
+            estado = _transicion(estado, AgentFase.DONE, razon="tarea completada")
+            self._estados[sid] = estado
+            yield ActualizacionAgente(
+                tipo="listo",
+                fase=AgentFase.DONE,
+                mensaje=resumen,
+                progreso=1.0,
+                traza=estado.get("traza"),
+            )
 
         finally:
             self._eventos_resume.pop(sid, None)
@@ -663,10 +798,28 @@ class Agente:
                     self._tareas_paso[session_id] = tarea_mcp  # type: ignore[assignment]
                 resultado_mcp = await tarea_mcp
                 duracion = int((time.monotonic() - inicio) * 1000)
+
+                # Sanitizar contenido externo antes de devolverlo al modelo
+                dato_sanitizado = resultado_mcp.data
+                if (
+                    resultado_mcp.success
+                    and paso.herramienta in _EXTERNAL_CONTENT_TOOLS
+                    and isinstance(dato_sanitizado, str)
+                    and self._permission_manager is not None
+                ):
+                    inj = await self._permission_manager.verificar_inyeccion(dato_sanitizado)
+                    if inj.es_inyeccion:
+                        log.warning(
+                            "Inyección detectada en resultado de '%s' (confianza=%.2f)",
+                            paso.herramienta,
+                            inj.confianza,
+                        )
+                        dato_sanitizado = inj.contenido_sanitizado
+
                 return ResultadoPaso(
                     id_paso=paso.id,
                     exito=resultado_mcp.success,
-                    salida=resultado_mcp.data,
+                    salida=dato_sanitizado,
                     error=resultado_mcp.error,
                     duracion_ms=duracion,
                     efectos_secundarios=resultado_mcp.side_effects,
@@ -730,6 +883,47 @@ class Agente:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _transicion(estado: AgentState, fase: AgentFase, **kw: Any) -> AgentState:
+    """Actualiza fase y añade entrada de traza en una operación atómica.
+
+    Ejemplo::
+        estado = _transicion(estado, AgentFase.EXECUTE_TOOL, herramienta="filesystem.leer")
+    """
+    entrada = TrazaPaso(fase=str(fase), **kw)
+    traza = list(estado.get("traza", []))
+    traza.append(entrada.model_dump(mode="json"))
+    return {**estado, "fase": str(fase), "traza": traza}
+
+
+def estado_a_dict(estado: AgentState) -> dict[str, Any]:
+    """Serializa AgentState a dict JSON-compatible para persistencia en SessionStore.
+
+    Ejemplo::
+        d = estado_a_dict(state)
+        json.dumps(d)  # → str válido
+    """
+    import dataclasses
+
+    def _ser(obj: Any) -> Any:
+        if hasattr(obj, "model_dump"):  # Pydantic
+            return obj.model_dump(mode="json")
+        if dataclasses.is_dataclass(obj) and not isinstance(obj, type):  # dataclass instance
+            return dataclasses.asdict(obj)
+        return obj
+
+    d: dict[str, Any] = dict(estado)
+    if d.get("current_plan") is not None:
+        d["current_plan"] = _ser(d["current_plan"])
+    for clave in ("completed_steps", "failed_steps"):
+        if d.get(clave):
+            d[clave] = [_ser(r) for r in d[clave]]
+    if d.get("paso_pendiente_confirmacion") is not None:
+        d["paso_pendiente_confirmacion"] = _ser(d["paso_pendiente_confirmacion"])
+    if d.get("messages"):
+        d["messages"] = [_ser(m) for m in d["messages"]]
+    return d
 
 
 def _hash_params(params: dict[str, Any]) -> str:

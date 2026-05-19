@@ -20,6 +20,7 @@ from interface.api import (
     _session_tasks,
     crear_servidor,
 )
+from interface.api_auth import _IP_RATE, get_api_token
 from interface.websocket import ConnectionManager
 
 # ---------------------------------------------------------------------------
@@ -62,11 +63,13 @@ def _limpiar_estado():
     _session_history.clear()
     _session_tasks.clear()
     _rate_state.clear()
+    _IP_RATE.clear()
     yield
     _session_queues.clear()
     _session_history.clear()
     _session_tasks.clear()
     _rate_state.clear()
+    _IP_RATE.clear()
 
 
 @pytest.fixture
@@ -86,6 +89,17 @@ def app(agente, manager):
 
 @pytest.fixture
 async def client(app):
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+        headers={"X-JARVIS-Token": get_api_token()},
+    ) as c:
+        yield c
+
+
+@pytest.fixture
+async def unauth_client(app):
+    """Cliente sin token — para tests de 401."""
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://testserver",
@@ -218,7 +232,9 @@ async def test_confirm_404_cuando_resume_falla(manager):
     agente.resume = AsyncMock(return_value=False)
     app2 = crear_servidor(agente, manager)
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app2), base_url="http://test"
+        transport=httpx.ASGITransport(app=app2),
+        base_url="http://test",
+        headers={"X-JARVIS-Token": get_api_token()},
     ) as c:
         await c.post("/chat", json={"message": "test", "session_id": "conf-fail"})
         r = await c.post(
@@ -245,7 +261,9 @@ async def test_cancel_not_found_cuando_cancel_falla(manager):
     agente.cancel = AsyncMock(return_value=False)
     app2 = crear_servidor(agente, manager)
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app2), base_url="http://test"
+        transport=httpx.ASGITransport(app=app2),
+        base_url="http://test",
+        headers={"X-JARVIS-Token": get_api_token()},
     ) as c:
         r = await c.post("/cancel/inexistente")
     assert r.status_code == 200
@@ -279,7 +297,9 @@ async def test_history_acumula_updates(app):
     app2 = crear_servidor(agente, manager)
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app2), base_url="http://test"
+        transport=httpx.ASGITransport(app=app2),
+        base_url="http://test",
+        headers={"X-JARVIS-Token": get_api_token()},
     ) as c:
         await c.post("/chat", json={"message": "x", "session_id": "hist-ok"})
         await asyncio.sleep(0.15)
@@ -322,9 +342,12 @@ async def test_rate_limit_429_al_superar_10_por_segundo(manager):
 # ---------------------------------------------------------------------------
 
 
+def _ws_url(session_id: str) -> str:
+    return f"/ws?session_id={session_id}&token={get_api_token()}"
+
+
 def test_websocket_ping_pong(app):
-    with TestClient(app) as tc, tc.websocket_connect("/ws?session_id=ws-ping") as ws:
-        # Consumir el session_state enviado al conectar
+    with TestClient(app) as tc, tc.websocket_connect(_ws_url("ws-ping")) as ws:
         session_state = orjson.loads(ws.receive_text())
         assert session_state["type"] == "session_state"
         ws.send_text(orjson.dumps({"type": "ping"}).decode())
@@ -333,8 +356,7 @@ def test_websocket_ping_pong(app):
 
 
 def test_websocket_json_invalido_devuelve_error(app):
-    with TestClient(app) as tc, tc.websocket_connect("/ws?session_id=ws-json") as ws:
-        # Consumir el session_state enviado al conectar
+    with TestClient(app) as tc, tc.websocket_connect(_ws_url("ws-json")) as ws:
         session_state = orjson.loads(ws.receive_text())
         assert session_state["type"] == "session_state"
         ws.send_text("esto no es json{{{")
@@ -351,8 +373,7 @@ def test_websocket_reconexion_recibe_buffer(manager):
     agente = make_agente()
     app2 = crear_servidor(agente, manager)
 
-    with TestClient(app2) as tc, tc.websocket_connect("/ws?session_id=buf-sid") as ws:
-        # El buffer se envía primero, luego el session_state
+    with TestClient(app2) as tc, tc.websocket_connect(_ws_url("buf-sid")) as ws:
         buf_msg = orjson.loads(ws.receive_text())
         assert buf_msg["message"] == "Completado."
         state_msg = orjson.loads(ws.receive_text())
@@ -369,7 +390,7 @@ def test_websocket_reconnect_sends_state(manager):
     agente = make_agente()
     app2 = crear_servidor(agente, manager)
 
-    with TestClient(app2) as tc, tc.websocket_connect("/ws?session_id=state-sid") as ws:
+    with TestClient(app2) as tc, tc.websocket_connect(_ws_url("state-sid")) as ws:
         msg = orjson.loads(ws.receive_text())
         assert msg["type"] == "session_state"
         assert "session_state" in msg
@@ -393,8 +414,7 @@ def test_websocket_reconnect_sends_last_known_state(manager):
     agente = make_agente()
     app2 = crear_servidor(agente, manager)
 
-    with TestClient(app2) as tc, tc.websocket_connect("/ws?session_id=hist-ws") as ws:
-        # Solo se recibe el session_state (no hay buffer en manager._buffers)
+    with TestClient(app2) as tc, tc.websocket_connect(_ws_url("hist-ws")) as ws:
         msg = orjson.loads(ws.receive_text())
         assert msg["type"] == "session_state"
         assert msg["session_state"] == "thinking"
@@ -419,7 +439,7 @@ def test_websocket_reconnect_pending_confirmation(manager):
     agente = make_agente()
     app2 = crear_servidor(agente, manager, confirmation_manager=cm)
 
-    with TestClient(app2) as tc, tc.websocket_connect("/ws?session_id=conf-ws") as ws:
+    with TestClient(app2) as tc, tc.websocket_connect(_ws_url("conf-ws")) as ws:
         msg = orjson.loads(ws.receive_text())
         assert msg["type"] == "session_state"
         assert msg["pending_confirmation"] is not None
@@ -443,3 +463,133 @@ async def test_sessions_sin_store_devuelve_lista_vacia(client):
     r = await client.get("/sessions")
     assert r.status_code == 200
     assert r.json() == []
+
+
+# ---------------------------------------------------------------------------
+# Seguridad — autenticación (401) y WebSocket sin token
+# ---------------------------------------------------------------------------
+
+
+async def test_audit_sin_token_devuelve_401(unauth_client):
+    r = await unauth_client.get("/audit")
+    assert r.status_code == 401
+
+
+async def test_sessions_sin_token_devuelve_401(unauth_client):
+    r = await unauth_client.get("/sessions")
+    assert r.status_code == 401
+
+
+async def test_history_sin_token_devuelve_401(unauth_client):
+    r = await unauth_client.get("/history/cualquier-sesion")
+    assert r.status_code == 401
+
+
+async def test_screenshot_sin_token_devuelve_401(unauth_client):
+    r = await unauth_client.post("/screenshot")
+    assert r.status_code == 401
+
+
+async def test_confirm_sin_token_devuelve_401(unauth_client):
+    r = await unauth_client.post(
+        "/confirm/test-sid", json={"action_id": "x", "confirmed": True}
+    )
+    assert r.status_code == 401
+
+
+async def test_cancel_sin_token_devuelve_401(unauth_client):
+    r = await unauth_client.post("/cancel/test-sid")
+    assert r.status_code == 401
+
+
+async def test_token_incorrecto_devuelve_401(app):
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+        headers={"X-JARVIS-Token": "token-falso-00000000"},
+    ) as c:
+        r = await c.get("/audit")
+    assert r.status_code == 401
+
+
+async def test_endpoints_publicos_no_requieren_token(unauth_client):
+    """chat, status y dashboard no requieren autenticación."""
+    r_status = await unauth_client.get("/status")
+    r_dash = await unauth_client.get("/")
+    assert r_status.status_code == 200
+    assert r_dash.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Seguridad — body size limit (413)
+# ---------------------------------------------------------------------------
+
+
+async def test_body_demasiado_grande_devuelve_413(app):
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as c:
+        payload = "x" * (17 * 1024)
+        r = await c.post(
+            "/chat",
+            content=payload,
+            headers={"content-type": "application/json", "content-length": str(len(payload))},
+        )
+    assert r.status_code == 413
+
+
+# ---------------------------------------------------------------------------
+# Seguridad — session_id inválido en path params (422)
+# ---------------------------------------------------------------------------
+
+
+async def test_stream_session_id_invalido_devuelve_error(client):
+    # Path traversal bloqueado por Starlette (404) o por validación (422)
+    r = await client.get("/stream/../../etc/passwd")
+    assert r.status_code in (400, 404, 422)
+
+
+async def test_stream_session_id_con_caracteres_invalidos(client):
+    r = await client.get("/stream/inv@lid!chars")
+    assert r.status_code in (400, 422)
+
+
+async def test_history_session_id_invalido_devuelve_error(client):
+    r = await client.get("/history/../../invalid")
+    assert r.status_code in (400, 401, 404, 422)
+
+
+# ---------------------------------------------------------------------------
+# Seguridad — screenshot con biométrica mockeada
+# ---------------------------------------------------------------------------
+
+
+async def test_screenshot_con_auth_biometrica_fallida_devuelve_403(agente, manager):
+    from unittest.mock import AsyncMock
+
+    from security.auth import AuthError, AuthManager
+
+    mock_auth = AsyncMock(spec=AuthManager)
+    mock_auth.require_auth.side_effect = AuthError("Face ID rechazado")
+
+    app2 = crear_servidor(agente, manager, auth_manager=mock_auth)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app2),
+        base_url="http://testserver",
+        headers={"X-JARVIS-Token": get_api_token()},
+    ) as c:
+        r = await c.post("/screenshot")
+    assert r.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Seguridad — WebSocket sin token
+# ---------------------------------------------------------------------------
+
+
+def test_websocket_sin_token_cierra_conexion(app):
+    with TestClient(app) as tc:
+        with pytest.raises(Exception):
+            with tc.websocket_connect("/ws?session_id=no-auth") as ws:
+                ws.receive_text()

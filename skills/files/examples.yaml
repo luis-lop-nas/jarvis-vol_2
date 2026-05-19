@@ -1,0 +1,32 @@
+- tarea: Lee el archivo README.md
+  herramienta: filesystem.leer
+  parametros:
+    ruta: ~/Documents/JARVIS/README.md
+
+- tarea: Lista los archivos en la carpeta de proyectos
+  herramienta: filesystem.listar
+  parametros:
+    ruta: ~/Documents/JARVIS/proyectos/
+
+- tarea: Busca todos los archivos Python en el sandbox
+  herramienta: filesystem.buscar
+  parametros:
+    patron: "*.py"
+    directorio: ~/Documents/JARVIS/
+
+- tarea: Guarda el resultado del análisis en un archivo
+  herramienta: filesystem.escribir
+  parametros:
+    ruta: ~/Documents/JARVIS/resultado.txt
+    contenido: "Análisis completado el 2026-05-19"
+
+- tarea: Mueve el borrador a la carpeta de archivados
+  herramienta: filesystem.mover
+  parametros:
+    origen: ~/Documents/JARVIS/borrador.md
+    destino: ~/Documents/JARVIS/archivados/borrador.md
+
+- tarea: Elimina el archivo temporal
+  herramienta: filesystem.eliminar
+  parametros:
+    ruta: ~/Documents/JARVIS/temp.txt

@@ -9,19 +9,18 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import re
 import time
 from collections import defaultdict, deque
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
 from uuid import uuid4
 
 import httpx
 import orjson
 import psutil
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Path, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from sse_starlette.sse import EventSourceResponse
@@ -30,14 +29,18 @@ if TYPE_CHECKING:
     from core.mcp_bus import MCPBus
     from core.router import ModelRouter
     from security.audit_log import AuditLog
+    from security.auth import AuthManager
     from security.confirmation import ConfirmationManager
 
 from core.agent import ActualizacionAgente, Agente
+from interface.api_auth import SESSION_ID_RE, check_ip_rate, require_auth
 from interface.api_models import (
     AgentUpdate,
     ChatRequest,
     ChatResponse,
     ConfirmRequest,
+    SkillInfo,
+    SkillsResponse,
     SystemStatus,
 )
 from interface.dashboard import build_dashboard_html
@@ -60,9 +63,7 @@ _rate_state: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=20))
 RATE_LIMIT = 10       # req/s por session_id
 MAX_HISTORY = 50
 MAX_SESSIONS = 500    # evita DoS por acumulación de sesiones
-
-# Validación de session_id — solo alfanumérico + guiones
-_SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+MAX_BODY_SIZE = 16 * 1024  # 16 KB
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +156,8 @@ def crear_servidor(
     bus: MCPBus | None = None,
     session_store: SessionStore | None = None,
     router: ModelRouter | None = None,
+    auth_manager: AuthManager | None = None,
+    skill_registry: Any | None = None,
 ) -> FastAPI:
     """Construye la aplicación FastAPI completa con todas las rutas."""
 
@@ -202,6 +205,20 @@ def crear_servidor(
         log.debug("← %d", resp.status_code)
         return resp
 
+    @app.middleware("http")
+    async def _limit_body_size(request: Request, call_next: Any) -> Any:
+        cl = request.headers.get("content-length")
+        if cl and int(cl) > MAX_BODY_SIZE:
+            return JSONResponse(status_code=413, content={"detail": "Cuerpo demasiado grande"})
+        return await call_next(request)
+
+    @app.middleware("http")
+    async def _ip_rate_limit(request: Request, call_next: Any) -> Any:
+        ip = request.client.host if request.client else "testclient"
+        if not check_ip_rate(ip):
+            return JSONResponse(status_code=429, content={"detail": "Rate limit por IP excedido"})
+        return await call_next(request)
+
     @app.exception_handler(Exception)
     async def _global_error(request: Request, exc: Exception) -> JSONResponse:
         log.exception("Error no manejado en %s", request.url.path)
@@ -218,7 +235,7 @@ def crear_servidor(
     async def chat(req: ChatRequest) -> ChatResponse:
         session_id = req.session_id or uuid4().hex
 
-        if not _SESSION_ID_RE.match(session_id):
+        if not SESSION_ID_RE.match(session_id):
             raise HTTPException(status_code=400, detail="session_id inválido")
 
         if not _check_rate(session_id):
@@ -254,7 +271,10 @@ def crear_servidor(
     # ------------------------------------------------------------------
 
     @app.get("/stream/{session_id}")
-    async def stream_sse(session_id: str, request: Request) -> EventSourceResponse:
+    async def stream_sse(
+        session_id: Annotated[str, Path(pattern=r"^[a-zA-Z0-9_-]{1,64}$")],
+        request: Request,
+    ) -> EventSourceResponse:
         if not _check_rate(session_id):
             raise HTTPException(status_code=429, detail="Rate limit excedido")
 
@@ -280,8 +300,11 @@ def crear_servidor(
     # POST /confirm/{session_id} — desbloquea al agente en WAIT_USER
     # ------------------------------------------------------------------
 
-    @app.post("/confirm/{session_id}")
-    async def confirm(session_id: str, req: ConfirmRequest) -> dict[str, str]:
+    @app.post("/confirm/{session_id}", dependencies=[Depends(require_auth)])
+    async def confirm(
+        session_id: Annotated[str, Path(pattern=r"^[a-zA-Z0-9_-]{1,64}$")],
+        req: ConfirmRequest,
+    ) -> dict[str, str]:
         if not _check_rate(session_id):
             raise HTTPException(status_code=429, detail="Rate limit excedido")
 
@@ -302,8 +325,10 @@ def crear_servidor(
     # POST /cancel/{session_id} — cancela tarea activa
     # ------------------------------------------------------------------
 
-    @app.post("/cancel/{session_id}")
-    async def cancel(session_id: str) -> dict[str, str]:
+    @app.post("/cancel/{session_id}", dependencies=[Depends(require_auth)])
+    async def cancel(
+        session_id: Annotated[str, Path(pattern=r"^[a-zA-Z0-9_-]{1,64}$")],
+    ) -> dict[str, str]:
         if not _check_rate(session_id):
             raise HTTPException(status_code=429, detail="Rate limit excedido")
 
@@ -367,10 +392,22 @@ def crear_servidor(
         )
 
     # ------------------------------------------------------------------
+    # GET /skills — lista de skills registrados
+    # ------------------------------------------------------------------
+
+    @app.get("/skills", response_model=SkillsResponse)
+    async def list_skills() -> SkillsResponse:
+        if skill_registry is None:
+            return SkillsResponse(total=0, skills=[])
+        raw = skill_registry.listar()
+        skills = [SkillInfo(**s) for s in raw]
+        return SkillsResponse(total=len(skills), skills=skills)
+
+    # ------------------------------------------------------------------
     # GET /sessions — metadatos de sesiones persistidas en disco
     # ------------------------------------------------------------------
 
-    @app.get("/sessions")
+    @app.get("/sessions", dependencies=[Depends(require_auth)])
     async def list_sessions() -> list[dict]:
         if session_store is None:
             return []
@@ -380,8 +417,11 @@ def crear_servidor(
     # GET /history/{session_id} — últimos N mensajes
     # ------------------------------------------------------------------
 
-    @app.get("/history/{session_id}")
-    async def history(session_id: str, n: int = 20) -> list[dict]:
+    @app.get("/history/{session_id}", dependencies=[Depends(require_auth)])
+    async def history(
+        session_id: Annotated[str, Path(pattern=r"^[a-zA-Z0-9_-]{1,64}$")],
+        n: int = 20,
+    ) -> list[dict]:
         hist = _session_history.get(session_id, deque())
         return [u.model_dump() for u in list(hist)[-n:]]
 
@@ -389,7 +429,7 @@ def crear_servidor(
     # GET /audit — consulta filtrada del audit log (requiere auth)
     # ------------------------------------------------------------------
 
-    @app.get("/audit")
+    @app.get("/audit", dependencies=[Depends(require_auth)])
     async def audit_query(
         action_type: str | None = None,
         hours: int = 24,
@@ -402,11 +442,17 @@ def crear_servidor(
         return [e.model_dump(mode="json") for e in entries]
 
     # ------------------------------------------------------------------
-    # POST /screenshot — captura pantalla en base64
+    # POST /screenshot — captura pantalla en base64 (token + Face ID)
     # ------------------------------------------------------------------
 
-    @app.post("/screenshot")
+    @app.post("/screenshot", dependencies=[Depends(require_auth)])
     async def screenshot() -> dict[str, str]:
+        if auth_manager is not None:
+            from security.auth import AuthError
+            try:
+                await auth_manager.require_auth("JARVIS: captura de pantalla")
+            except AuthError as exc:
+                raise HTTPException(status_code=403, detail=str(exc)) from None
         try:
             from perception.screenshot import capture_screen, encode_for_vision
 
@@ -425,8 +471,13 @@ def crear_servidor(
     async def ws_endpoint(
         websocket: WebSocket,
         session_id: str = "default",
+        token: str | None = None,
     ) -> None:
-        if not _SESSION_ID_RE.match(session_id):
+        from interface.api_auth import get_api_token
+        if token != get_api_token():
+            await websocket.close(code=1008, reason="No autorizado")
+            return
+        if not SESSION_ID_RE.match(session_id):
             await websocket.close(code=1008, reason="session_id inválido")
             return
         await manager.connect(websocket, session_id)
@@ -476,7 +527,7 @@ def crear_servidor(
                 tipo = payload.get("type")
                 raw_sid = payload.get("session_id", session_id)
                 sid = str(raw_sid) if raw_sid is not None else session_id
-                if not _SESSION_ID_RE.match(sid):
+                if not SESSION_ID_RE.match(sid):
                     await websocket.send_text(
                         orjson.dumps({"type": "error", "message": "session_id inválido"}).decode()
                     )

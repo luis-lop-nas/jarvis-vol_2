@@ -1,0 +1,28 @@
+- tarea: Abre la página de GitHub
+  herramienta: browser.abrir
+  parametros:
+    url: https://github.com
+
+- tarea: Lee el título y el contenido principal de la página actual
+  herramienta: browser.leer
+  parametros: {}
+
+- tarea: Haz click en el botón de login
+  herramienta: browser.click
+  parametros:
+    selector: "button[type=submit]"
+
+- tarea: Rellena el campo de búsqueda con 'python asyncio'
+  herramienta: browser.fill
+  parametros:
+    selector: "input[name=q]"
+    valor: python asyncio
+
+- tarea: Captura una screenshot del navegador
+  herramienta: browser.screenshot
+  parametros: {}
+
+- tarea: Obtén el título de la página via JS
+  herramienta: browser.ejecutar_js
+  parametros:
+    codigo: "document.title"

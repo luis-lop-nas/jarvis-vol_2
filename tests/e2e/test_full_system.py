@@ -125,9 +125,11 @@ async def jarvis_stack(tmp_path: Path):
 
     app = crear_servidor(agente, manager, confirmation_manager=cm)
 
+    from interface.api_auth import get_api_token
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://testserver",
+        headers={"X-JARVIS-Token": get_api_token()},
     ) as client:
         yield {
             "agente": agente,
@@ -420,9 +422,12 @@ def test_e2e_websocket_protocol(jarvis_stack: dict) -> None:
     """El protocolo WebSocket responde ping→pong e invalida session_id incorrectos."""
     app = jarvis_stack["app"]
 
+    from interface.api_auth import get_api_token
+    token = get_api_token()
+
     with TestClient(app) as tc:
         # Ping → pong (el primer mensaje al conectar es session_state; consumir primero)
-        with tc.websocket_connect("/ws?session_id=e2e-proto") as ws:
+        with tc.websocket_connect(f"/ws?session_id=e2e-proto&token={token}") as ws:
             state_msg = orjson.loads(ws.receive_text())
             assert state_msg["type"] == "session_state"
             ws.send_text(orjson.dumps({"type": "ping"}).decode())
@@ -431,7 +436,7 @@ def test_e2e_websocket_protocol(jarvis_stack: dict) -> None:
 
         # session_id inválido → cierre 1008
         try:
-            with tc.websocket_connect("/ws?session_id=!!!invalid!!!") as ws:
+            with tc.websocket_connect(f"/ws?session_id=!!!invalid!!!&token={token}") as ws:
                 ws.receive_text()
             raise AssertionError("Esperaba cierre por session_id inválido")
         except AssertionError:

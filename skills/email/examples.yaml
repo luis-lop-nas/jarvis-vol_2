@@ -1,0 +1,16 @@
+- tarea: Lee los últimos 5 correos del buzón
+  herramienta: mail.leer
+  parametros:
+    limite: 5
+
+- tarea: Envía un resumen diario a Luis
+  herramienta: mail.enviar
+  parametros:
+    destinatario: luistghc03@gmail.com
+    asunto: Resumen JARVIS — 2026-05-19
+    cuerpo: "Hoy completé 3 tareas: organicé archivos, actualicé el calendario y revisé el correo."
+
+- tarea: Elimina el correo de spam de ID xyz
+  herramienta: mail.eliminar
+  parametros:
+    mensaje_id: xyz789

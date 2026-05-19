@@ -1,0 +1,69 @@
+nombre: browser
+descripcion: Control del navegador web Safari en macOS
+version: "1.0.0"
+autor: JARVIS
+
+riesgos:
+  - Puede navegar a URLs arbitrarias
+  - browser.ejecutar_js ejecuta código en el contexto de la página activa
+  - No accede a contraseñas guardadas del navegador
+
+herramientas:
+  - nombre: browser.abrir
+    descripcion: Navega a una URL en Safari
+    nivel_riesgo: medium
+    puede_usar_red: true
+    parametros:
+      url:
+        type: string
+        description: URL a abrir (debe comenzar con http:// o https://)
+        required: true
+
+  - nombre: browser.leer
+    descripcion: Lee el contenido de texto de la página activa
+    nivel_riesgo: low
+    puede_usar_red: true
+    parametros: {}
+
+  - nombre: browser.click
+    descripcion: Hace click en un elemento de la página identificado por selector CSS
+    nivel_riesgo: medium
+    puede_usar_red: true
+    parametros:
+      selector:
+        type: string
+        description: Selector CSS del elemento
+        required: true
+
+  - nombre: browser.fill
+    descripcion: Rellena un campo de formulario con el valor dado
+    nivel_riesgo: medium
+    puede_usar_red: true
+    parametros:
+      selector:
+        type: string
+        description: Selector CSS del campo
+        required: true
+      valor:
+        type: string
+        description: Texto a escribir en el campo
+        required: true
+
+  - nombre: browser.screenshot
+    descripcion: Captura pantalla del navegador activo
+    nivel_riesgo: low
+    puede_leer_pantalla: true
+    permisos_requeridos:
+      - SCREEN_RECORDING
+    parametros: {}
+
+  - nombre: browser.ejecutar_js
+    descripcion: Ejecuta JavaScript arbitrario en la página activa
+    nivel_riesgo: high
+    requiere_confirmacion: true
+    puede_usar_red: true
+    parametros:
+      codigo:
+        type: string
+        description: Código JavaScript a ejecutar
+        required: true

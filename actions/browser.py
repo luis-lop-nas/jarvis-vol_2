@@ -8,8 +8,10 @@ Dos capas:
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
@@ -423,6 +425,485 @@ class Navegador:
 
 def _escapar(texto: str) -> str:
     return texto.replace("\\", "\\\\").replace('"', '\\"')
+
+
+# ---------------------------------------------------------------------------
+# Tipos de la capa de agente
+# ---------------------------------------------------------------------------
+
+
+class PermisosBrowser(str, Enum):
+    """Capacidades del navegador que requieren autorización explícita."""
+
+    NAVEGACION_EXTERNA = "browser.navegacion_externa"
+    DESCARGA = "browser.descarga"
+    JS = "browser.javascript"
+
+
+@dataclass(slots=True)
+class ResultadoNavegacion:
+    """Resultado de una operación de navegación del agente.
+
+    Ejemplo::
+        res = await sesion.open_url("https://example.com")
+        assert res.ok and res.url_cambio
+    """
+
+    ok: bool
+    url_actual: str
+    url_cambio: bool
+    mensaje: str = ""
+
+
+@dataclass(slots=True)
+class InfoEnlace:
+    """Enlace extraído de una página.
+
+    Ejemplo::
+        enlaces = await sesion.extract_links()
+        hrefs = [e.href for e in enlaces]
+    """
+
+    texto: str
+    href: str
+
+
+@dataclass(slots=True)
+class CampoFormulario:
+    """Campo de un formulario HTML."""
+
+    nombre: str
+    tipo: str
+    valor: str | None
+    etiqueta: str | None
+
+
+@dataclass(slots=True)
+class InfoFormulario:
+    """Formulario extraído de una página.
+
+    Ejemplo::
+        forms = await sesion.extract_forms()
+        print(forms[0].campos)
+    """
+
+    accion: str
+    metodo: str
+    campos: list[CampoFormulario]
+
+
+# ---------------------------------------------------------------------------
+# SesionNavegador — herramientas web de alto nivel
+# ---------------------------------------------------------------------------
+
+
+class SesionNavegador:
+    """Sesión de navegación de alto nivel. No expone objetos internos de Playwright.
+
+    El agente interactúa solo con esta clase — nunca con Page, BrowserContext, etc.
+
+    Ejemplo::
+        async with GestorSesiones() as gestor:
+            sesion = await gestor.obtener_sesion("tarea-1")
+            res = await sesion.open_url("https://python.org")
+            print(await sesion.get_text())
+    """
+
+    def __init__(
+        self,
+        session_id: str,
+        page: Any,
+        context: Any,
+        confirmar: CallbackConfirmacion,
+        permisos: set[PermisosBrowser],
+        audit_log: Any | None = None,
+    ) -> None:
+        self._session_id = session_id
+        self._page = page
+        self._context = context
+        self._confirmar = confirmar
+        self._permisos = permisos
+        self._audit = audit_log
+
+    @property
+    def session_id(self) -> str:
+        return self._session_id
+
+    @property
+    def url_actual(self) -> str:
+        return self._page.url
+
+    async def open_url(self, url: str) -> ResultadoNavegacion:
+        """Navega a una URL y espera a que cargue el DOM.
+
+        Verifica: cambio de URL respecto a la anterior.
+
+        Ejemplo::
+            res = await sesion.open_url("https://example.com")
+        """
+        if not _es_local(url) and PermisosBrowser.NAVEGACION_EXTERNA not in self._permisos:
+            aprobado = await self._confirmar(f"Navegar a URL externa: {url}")
+            if not aprobado:
+                return ResultadoNavegacion(
+                    ok=False, url_actual=self._page.url,
+                    url_cambio=False, mensaje="navegación externa no autorizada",
+                )
+            self._permisos.add(PermisosBrowser.NAVEGACION_EXTERNA)
+
+        url_antes = self._page.url
+        await self._audit_log("open_url", {"url": url})
+        try:
+            await self._page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            url_despues = self._page.url
+            return ResultadoNavegacion(
+                ok=True, url_actual=url_despues,
+                url_cambio=url_despues != url_antes, mensaje="",
+            )
+        except Exception as e:
+            return ResultadoNavegacion(
+                ok=False, url_actual=self._page.url,
+                url_cambio=False, mensaje=str(e),
+            )
+
+    async def get_text(self) -> str:
+        """Devuelve el texto visible de la página actual.
+
+        Ejemplo::
+            texto = await sesion.get_text()
+        """
+        try:
+            return await self._page.inner_text("body")
+        except Exception:
+            return ""
+
+    async def click(self, selector_or_text: str) -> ResultadoNavegacion:
+        """Hace click en un elemento por selector CSS o por texto visible.
+
+        Verifica: elemento visible y sin error. Detecta cambio de URL.
+
+        Ejemplo::
+            await sesion.click("Iniciar sesión")   # texto visible
+            await sesion.click("#submit-btn")       # selector CSS
+        """
+        url_antes = self._page.url
+        try:
+            if _es_selector(selector_or_text):
+                await self._page.click(selector_or_text, timeout=5_000)
+            else:
+                await self._page.get_by_text(selector_or_text, exact=False).first.click(timeout=5_000)
+            try:
+                await self._page.wait_for_load_state("domcontentloaded", timeout=5_000)
+            except Exception:
+                pass
+            url_despues = self._page.url
+            return ResultadoNavegacion(
+                ok=True, url_actual=url_despues,
+                url_cambio=url_despues != url_antes, mensaje="",
+            )
+        except Exception as e:
+            return ResultadoNavegacion(
+                ok=False, url_actual=self._page.url,
+                url_cambio=False, mensaje=str(e),
+            )
+
+    async def fill(self, selector_or_label: str, value: str) -> ResultadoNavegacion:
+        """Rellena un campo de formulario por selector CSS, etiqueta o placeholder.
+
+        Verifica: campo encontrado y rellenado sin error.
+
+        Ejemplo::
+            await sesion.fill("Nombre", "Luis")
+            await sesion.fill("#email", "luis@example.com")
+        """
+        try:
+            if _es_selector(selector_or_label):
+                await self._page.fill(selector_or_label, value, timeout=5_000)
+            else:
+                locator = self._page.get_by_label(selector_or_label, exact=False)
+                if await locator.count() > 0:
+                    await locator.first.fill(value, timeout=5_000)
+                else:
+                    await self._page.get_by_placeholder(
+                        selector_or_label, exact=False
+                    ).first.fill(value, timeout=5_000)
+            return ResultadoNavegacion(
+                ok=True, url_actual=self._page.url,
+                url_cambio=False, mensaje="",
+            )
+        except Exception as e:
+            return ResultadoNavegacion(
+                ok=False, url_actual=self._page.url,
+                url_cambio=False, mensaje=str(e),
+            )
+
+    async def submit(self) -> ResultadoNavegacion:
+        """Envía el formulario activo (button[type=submit] → input[type=submit] → button).
+
+        Verifica: botón encontrado, envío ejecutado. Detecta cambio de URL.
+
+        Ejemplo::
+            await sesion.fill("nombre", "Luis")
+            res = await sesion.submit()
+            assert res.ok
+        """
+        url_antes = self._page.url
+        enviado = False
+        for selector in ("button[type=submit]", "input[type=submit]", "button:not([type])"):
+            try:
+                await self._page.click(selector, timeout=2_000)
+                enviado = True
+                break
+            except Exception:
+                continue
+        if not enviado:
+            return ResultadoNavegacion(
+                ok=False, url_actual=self._page.url,
+                url_cambio=False, mensaje="no se encontró botón de envío",
+            )
+        try:
+            await self._page.wait_for_load_state("domcontentloaded", timeout=10_000)
+        except Exception:
+            pass
+        url_despues = self._page.url
+        return ResultadoNavegacion(
+            ok=True, url_actual=url_despues,
+            url_cambio=url_despues != url_antes, mensaje="formulario enviado",
+        )
+
+    async def wait_for(self, text_or_selector: str, *, timeout: int = 10_000) -> bool:
+        """Espera hasta que aparezca un texto o selector en la página.
+
+        Verifica: texto nuevo visible o elemento presente.
+
+        Ejemplo::
+            ok = await sesion.wait_for("Bienvenido", timeout=5000)
+        """
+        try:
+            if _es_selector(text_or_selector):
+                await self._page.wait_for_selector(text_or_selector, timeout=timeout)
+            else:
+                await self._page.wait_for_function(
+                    f"document.body.innerText.includes({json.dumps(text_or_selector)})",
+                    timeout=timeout,
+                )
+            return True
+        except Exception:
+            return False
+
+    async def screenshot(self) -> bytes:
+        """Captura la página completa como PNG.
+
+        Ejemplo::
+            png = await sesion.screenshot()
+            Path("captura.png").write_bytes(png)
+        """
+        return await self._page.screenshot(full_page=True)
+
+    async def download(self, url: str, destination: Path) -> Path | None:
+        """Descarga un archivo a `destination`. Requiere permiso DESCARGA.
+
+        Verifica: archivo presente en `destination` al completarse.
+
+        Ejemplo::
+            ruta = await sesion.download("https://example.com/doc.pdf", Path("/tmp/doc.pdf"))
+        """
+        if PermisosBrowser.DESCARGA not in self._permisos:
+            aprobado = await self._confirmar(f"Descargar archivo desde: {url}")
+            if not aprobado:
+                return None
+            self._permisos.add(PermisosBrowser.DESCARGA)
+
+        await self._audit_log("download", {"url": url, "destino": str(destination)})
+        try:
+            async with self._page.expect_download(timeout=30_000) as dl_info:
+                await self._page.goto(url)
+            descarga = await dl_info.value
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            await descarga.save_as(destination)
+            return destination if destination.exists() else None
+        except Exception:
+            return None
+
+    async def extract_links(self) -> list[InfoEnlace]:
+        """Extrae todos los enlaces con href de la página actual.
+
+        Ejemplo::
+            enlaces = await sesion.extract_links()
+        """
+        try:
+            datos: list[dict] = await self._page.evaluate(
+                "Array.from(document.querySelectorAll('a[href]'))"
+                ".map(a => ({texto: a.innerText.trim(), href: a.href}))"
+            )
+            return [InfoEnlace(texto=d["texto"], href=d["href"]) for d in datos]
+        except Exception:
+            return []
+
+    async def extract_forms(self) -> list[InfoFormulario]:
+        """Extrae formularios y sus campos de la página actual.
+
+        Ejemplo::
+            forms = await sesion.extract_forms()
+            print(forms[0].campos)
+        """
+        try:
+            datos: list[dict] = await self._page.evaluate("""
+                Array.from(document.querySelectorAll('form')).map(f => ({
+                    accion: f.action || '',
+                    metodo: f.method || 'get',
+                    campos: Array.from(f.querySelectorAll('input, textarea, select')).map(el => {
+                        const lbl = el.id
+                            ? document.querySelector('label[for="' + el.id + '"]')
+                            : null;
+                        return {
+                            nombre: el.name || '',
+                            tipo: el.type || el.tagName.toLowerCase(),
+                            valor: el.value || null,
+                            etiqueta: lbl ? lbl.innerText.trim() : null
+                        };
+                    })
+                }))
+            """)
+            return [
+                InfoFormulario(
+                    accion=f["accion"],
+                    metodo=f["metodo"],
+                    campos=[CampoFormulario(**c) for c in f["campos"]],
+                )
+                for f in datos
+            ]
+        except Exception:
+            return []
+
+    async def _audit_log(self, evento: str, datos: dict) -> None:
+        if self._audit is not None:
+            await self._audit.registrar(f"browser.sesion.{evento}", datos)
+
+
+# ---------------------------------------------------------------------------
+# GestorSesiones — sesiones por session_id
+# ---------------------------------------------------------------------------
+
+
+class GestorSesiones:
+    """Gestiona sesiones de navegación independientes identificadas por session_id.
+
+    Cada sesión tiene su propio BrowserContext y Page — sin fugas de objetos Playwright.
+
+    Ejemplo::
+        async with GestorSesiones(headless=True) as gestor:
+            sesion = await gestor.obtener_sesion("tarea-1")
+            await sesion.open_url("https://python.org")
+    """
+
+    def __init__(
+        self,
+        *,
+        headless: bool = True,
+        confirmar: CallbackConfirmacion | None = None,
+        permisos: set[PermisosBrowser] | None = None,
+        audit_log: Any | None = None,
+    ) -> None:
+        self._headless = headless
+        self._confirmar = confirmar or _denegar
+        self._permisos: set[PermisosBrowser] = permisos or set()
+        self._audit = audit_log
+        self._playwright: Any = None
+        self._browser: Any = None
+        self._sesiones: dict[str, SesionNavegador] = {}
+
+    async def __aenter__(self) -> Self:
+        await self.iniciar()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        await self.cerrar()
+
+    async def iniciar(self) -> None:
+        """Arranca Playwright y el navegador compartido.
+
+        Ejemplo::
+            gestor = GestorSesiones()
+            await gestor.iniciar()
+        """
+        from playwright.async_api import async_playwright
+        self._playwright = await async_playwright().start()
+        self._browser = await self._playwright.chromium.launch(headless=self._headless)
+
+    async def cerrar(self) -> None:
+        """Cierra todas las sesiones y libera recursos.
+
+        Ejemplo::
+            await gestor.cerrar()
+        """
+        for sid in list(self._sesiones):
+            await self.cerrar_sesion(sid)
+        if self._browser:
+            await self._browser.close()
+        if self._playwright:
+            await self._playwright.stop()
+
+    async def obtener_sesion(self, session_id: str) -> SesionNavegador:
+        """Devuelve la sesión existente o crea una nueva con su propio contexto.
+
+        Ejemplo::
+            sesion = await gestor.obtener_sesion("main")
+        """
+        if session_id not in self._sesiones:
+            context = await self._browser.new_context()
+            page = await context.new_page()
+            self._sesiones[session_id] = SesionNavegador(
+                session_id=session_id,
+                page=page,
+                context=context,
+                confirmar=self._confirmar,
+                permisos=set(self._permisos),
+                audit_log=self._audit,
+            )
+        return self._sesiones[session_id]
+
+    async def cerrar_sesion(self, session_id: str) -> None:
+        """Cierra y elimina una sesión específica.
+
+        Ejemplo::
+            await gestor.cerrar_sesion("main")
+        """
+        if session_id in self._sesiones:
+            sesion = self._sesiones.pop(session_id)
+            await sesion._context.close()
+
+    def sesiones_activas(self) -> list[str]:
+        """Lista los session_ids activos.
+
+        Ejemplo::
+            ids = gestor.sesiones_activas()
+        """
+        return list(self._sesiones)
+
+
+# ---------------------------------------------------------------------------
+# Helpers de la capa de agente
+# ---------------------------------------------------------------------------
+
+_SELECTOR_PREFIJOS = ("#", ".", "[", "//", "xpath=", "css=")
+_SELECTOR_TAG_ATTR = ("button[", "input[", "select[", "textarea[", "a[", "form[")
+
+
+def _es_selector(s: str) -> bool:
+    """Heurística: ¿es esto un selector CSS/XPath en lugar de texto visible?"""
+    if any(s.startswith(p) for p in _SELECTOR_PREFIJOS + _SELECTOR_TAG_ATTR):
+        return True
+    return "::" in s or ">>" in s
+
+
+def _es_local(url: str) -> bool:
+    """¿La URL apunta a recursos locales (file://, localhost, 127.0.0.1)?"""
+    return url.startswith("file://") or "localhost" in url or "127.0.0.1" in url
 
 
 # Importación diferida

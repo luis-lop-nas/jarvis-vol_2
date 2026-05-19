@@ -1,0 +1,23 @@
+- tarea: Lista los archivos del directorio JARVIS
+  herramienta: terminal.ejecutar
+  parametros:
+    comando: ls ~/Documents/JARVIS/
+
+- tarea: Comprueba el uso de disco
+  herramienta: terminal.ejecutar
+  parametros:
+    comando: df -h ~
+
+- tarea: Ejecuta un script de análisis Python
+  herramienta: terminal.python
+  parametros:
+    codigo: |
+      import os
+      archivos = os.listdir(os.path.expanduser("~/Documents/JARVIS/"))
+      print(f"Total archivos: {len(archivos)}")
+
+- tarea: Instala una dependencia Python
+  herramienta: terminal.ejecutar
+  parametros:
+    comando: pip install requests
+    timeout: 60
