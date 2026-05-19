@@ -14,8 +14,8 @@ import asyncio
 import logging
 import signal
 import subprocess
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 import httpx
 import psutil
@@ -25,6 +25,7 @@ from rich.logging import RichHandler
 from rich.panel import Panel
 from rich.table import Table
 
+import security
 from config import settings
 from core.agent import Agente
 from core.mcp_bus import MCPBus
@@ -32,12 +33,11 @@ from core.planner import Planner
 from core.reflector import Reflector
 from interface.api import crear_servidor
 from interface.websocket import ConnectionManager
+from mcp_servers import crear_bus_mcp
 from memory import MemorySystem
 from memory.episodic import MemoriaEpisodica
 from memory.short_term import MemoriaCortoPlazo
-from mcp_servers import crear_bus_mcp
 from models.ollama_client import OllamaModel
-import security
 from security.audit_log import AuditLog
 from security.auth import AuthManager
 from security.confirmation import ConfirmationManager

@@ -403,6 +403,7 @@ def test_websocket_reconnect_sends_last_known_state(manager):
 def test_websocket_reconnect_pending_confirmation(manager):
     """Si hay una confirmación pendiente para la sesión, se incluye en session_state."""
     from unittest.mock import MagicMock
+
     from security.confirmation import ConfirmationRequest
 
     pending_req = ConfirmationRequest(

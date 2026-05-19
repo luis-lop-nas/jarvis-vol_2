@@ -51,6 +51,35 @@ class ResultadoComando:
         """True si el proceso terminó con código 0."""
         return self.codigo_retorno == 0
 
+    @property
+    def lineas_stdout(self) -> int:
+        """Número de líneas en stdout."""
+        if not self.stdout:
+            return 0
+        return self.stdout.count("\n") + (0 if self.stdout.endswith("\n") else 1)
+
+    def formato_acotado(self, max_lineas: int = 100) -> str:
+        """Output acotado con header estructurado (patrón SWE-agent bounded observations).
+
+        Da contexto al LLM sobre el comando ejecutado sin necesidad de un prompt adicional.
+
+        Ejemplo::
+            res = await terminal.ejecutar_comando("ls -la")
+            print(res.formato_acotado(50))
+        """
+        lineas = self.stdout.splitlines()
+        total = len(lineas)
+        truncado = total > max_lineas
+        contenido = "\n".join(lineas[:max_lineas])
+        nombre_cmd = self.comando.split()[0] if self.comando else "?"
+        header = (
+            f"[Comando: {nombre_cmd} | Dir: {self.directorio} | "
+            f"Cód: {self.codigo_retorno} | {total} líneas | {self.duracion_ms:.0f}ms]"
+        )
+        footer = f"[... {total - max_lineas} líneas más omitidas]" if truncado else "[Fin]"
+        partes = [header, contenido, footer] if contenido else [header, "(sin salida)", footer]
+        return "\n".join(partes)
+
 
 # ---------------------------------------------------------------------------
 # Clasificación de comandos

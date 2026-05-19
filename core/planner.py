@@ -134,7 +134,24 @@ class Planner:
             Mensaje(rol="user", contenido=f"Tarea:\n{tarea}{ctx}{herr}"),
         ]
         respuesta = await self._modelo.complete(mensajes, temperatura=0.2, max_tokens=2048)
-        plan = self._parsear(respuesta.content)
+        # Patrón Instructor: si el JSON es inválido, devuelve un plan de aclaración
+        # en lugar de propagar una excepción que aborta la tarea.
+        try:
+            plan = self._parsear(respuesta.content)
+        except Exception:
+            log.warning("Respuesta del planner no es JSON válido — generando paso de aclaración")
+            plan = PlanEjecucion(
+                tarea=tarea,
+                pasos=[PasoAccion(
+                    id="aclaracion",
+                    descripcion="Pedir aclaración al usuario",
+                    herramienta="pedir_aclaracion",
+                    parametros={"mensaje": (
+                        "No pude generar un plan ejecutable para esta tarea. "
+                        "¿Puedes reformularla con más detalle?"
+                    )},
+                )],
+            )
         return plan.model_copy(update={
             "tarea": tarea,
             "modelo_usado": respuesta.model,
@@ -207,6 +224,18 @@ class Planner:
         grafo: dict[str, list[str]] = {p.id: p.depende_de for p in plan.pasos}
         if _tiene_ciclo(grafo):
             errores.append("El plan tiene dependencias circulares")
+
+        # Validación de orden topológico (JARVIS-1 Self-Check):
+        # un paso no puede depender de un paso que aparezca después en la lista.
+        id_a_indice = {p.id: i for i, p in enumerate(plan.pasos)}
+        for paso in plan.pasos:
+            paso_idx = id_a_indice[paso.id]
+            for dep in paso.depende_de:
+                if dep in id_a_indice and id_a_indice[dep] >= paso_idx:
+                    errores.append(
+                        f"Paso '{paso.id}' depende de '{dep}' que aparece después en el plan "
+                        "(violación de orden topológico)"
+                    )
 
         return errores
 

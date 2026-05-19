@@ -56,10 +56,9 @@ class RatonTeclado:
         self._contador_secuencia: int = 0
         self._emergencia_activa: bool = False
 
-        # Intentar Quartz; fallback pyautogui
+        # Quartz para mouse; pyautogui siempre para teclado/scroll/drag
         self._quartz_disponible = self._inicializar_quartz()
-        if not self._quartz_disponible:
-            self._inicializar_pyautogui()
+        self._inicializar_pyautogui()
 
     def _inicializar_quartz(self) -> bool:
         try:

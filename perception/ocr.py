@@ -281,9 +281,6 @@ async def extract_structured(image_bytes: bytes) -> dict[str, Any]:
 
 
 # ── Helpers privados ──────────────────────────────────────────────────────────
-_INDICADORES_CODIGO = {"def ", "class ", "import ", "return ", "if ", "for ", "while ", "{", "};", "=>"}
-
-
 def _inferir_tipo(texto: str) -> str:
     if any(ind in texto for ind in _INDICADORES_CODIGO):
         return "code"

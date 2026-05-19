@@ -7,6 +7,7 @@ El WebSocket vive en /ws dentro de la misma app.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 import time
@@ -31,8 +32,6 @@ if TYPE_CHECKING:
     from security.audit_log import AuditLog
     from security.confirmation import ConfirmationManager
 
-from security.confirmation import SecurityError
-
 from core.agent import ActualizacionAgente, Agente
 from interface.api_models import (
     AgentUpdate,
@@ -44,6 +43,7 @@ from interface.api_models import (
 from interface.dashboard import build_dashboard_html
 from interface.session_store import SessionStore
 from interface.websocket import ConnectionManager
+from security.confirmation import SecurityError
 
 log = logging.getLogger(__name__)
 
@@ -352,10 +352,8 @@ def crear_servidor(
 
         mcp_health: dict[str, bool] = {}
         if bus is not None:
-            try:
+            with contextlib.suppress(Exception):
                 mcp_health = await bus.health_check()
-            except Exception:
-                pass
 
         return SystemStatus(
             api_running=True,
@@ -376,7 +374,7 @@ def crear_servidor(
     async def list_sessions() -> list[dict]:
         if session_store is None:
             return []
-        return session_store.list_sessions()
+        return await asyncio.to_thread(session_store.list_sessions)
 
     # ------------------------------------------------------------------
     # GET /history/{session_id} — últimos N mensajes
@@ -456,15 +454,13 @@ def crear_servidor(
                         "requires_auth": req.requires_auth,
                     }
                     break
-        try:
+        with contextlib.suppress(Exception):
             await websocket.send_text(orjson.dumps({
                 "type": "session_state",
                 "session_state": ws_state,
                 "current_step": current_step,
                 "pending_confirmation": pending_conf,
             }).decode())
-        except Exception:
-            pass
 
         try:
             while True:

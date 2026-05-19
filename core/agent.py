@@ -13,7 +13,6 @@ import hashlib
 import json
 import logging
 import time
-from collections import deque
 from collections.abc import AsyncGenerator, Callable
 from datetime import UTC, datetime
 from typing import Any, TypedDict
@@ -23,13 +22,13 @@ from pydantic import BaseModel as _PBase
 
 from config import settings
 from core.mcp_bus import MCPBus
-from perception.verifier import ActionVerifier
 from core.planner import PasoAccion, PlanEjecucion, Planner
 from core.reflector import DecisionReflexion, Reflector, ResultadoPaso
 from memory import Episode, MemorySystem
 from memory.episodic import MemoriaEpisodica
 from memory.short_term import MemoriaCortoPlazo
 from models.base import Mensaje
+from perception.verifier import ActionVerifier
 from security.audit_log import AuditLog
 
 log = logging.getLogger(__name__)
@@ -417,8 +416,16 @@ class Agente:
                         estado = {**estado, "abort_reason": "Límite de replanes alcanzado."}
                     else:
                         try:
+                            # JARVIS-1 self-explain: genera análisis del fallo para enriquecer el replan
+                            explicacion = await self._reflector.explain_failure(
+                                paso, resultado, estado.get("system_context")
+                            )
+                            error_enriquecido = (
+                                f"{resultado.error or 'fallo desconocido'}"
+                                f"\n\nAnálisis del fallo: {explicacion}"
+                            )
                             nuevo_plan = await self._planner.replan(
-                                paso, plan, resultado.error or "fallo desconocido",
+                                paso, plan, error_enriquecido,
                                 estado.get("system_context"),
                             )
                             estado = {

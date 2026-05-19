@@ -488,9 +488,8 @@ def _buscar_en_arbol(arbol: ElementTree, descripcion: str) -> Bounds | None:
         str(info.placeholder or "").lower(),
         str(info.role or "").lower(),
     ]
-    if any(descripcion in c for c in candidatos if c):
-        if info.bounds is not None:
-            return info.bounds
+    if any(descripcion in c for c in candidatos if c) and info.bounds is not None:
+        return info.bounds
     for hijo in arbol.children:
         resultado = _buscar_en_arbol(hijo, descripcion)
         if resultado is not None:

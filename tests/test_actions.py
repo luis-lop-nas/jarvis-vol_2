@@ -6,7 +6,6 @@ periféricos del equipo. Deben pasar en CI sin macOS.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -288,6 +287,69 @@ class TestTerminal:
         res = await t.ejecutar_comando(f"rm {archivo}")
         assert res.exito
         assert not archivo.exists()
+
+
+# ---------------------------------------------------------------------------
+# ResultadoComando — formato acotado (patrón SWE-agent)
+# ---------------------------------------------------------------------------
+
+
+class TestResultadoComandoFormato:
+    """Tests de formato_acotado() y lineas_stdout en ResultadoComando."""
+
+    def _resultado(self, stdout: str, codigo: int = 0):
+        from actions.terminal import ResultadoComando
+        return ResultadoComando(
+            stdout=stdout,
+            stderr="",
+            codigo_retorno=codigo,
+            duracion_ms=12.5,
+            comando="ls -la",
+            directorio="/tmp",
+        )
+
+    def test_lineas_stdout_vacio(self) -> None:
+        r = self._resultado("")
+        assert r.lineas_stdout == 0
+
+    def test_lineas_stdout_una_linea(self) -> None:
+        r = self._resultado("hola\n")
+        assert r.lineas_stdout == 1
+
+    def test_lineas_stdout_sin_newline_final(self) -> None:
+        r = self._resultado("hola")
+        assert r.lineas_stdout == 1
+
+    def test_lineas_stdout_multiple(self) -> None:
+        r = self._resultado("a\nb\nc\n")
+        assert r.lineas_stdout == 3
+
+    def test_formato_acotado_header_presente(self) -> None:
+        r = self._resultado("linea1\nlinea2\n")
+        out = r.formato_acotado()
+        assert "[Comando: ls" in out
+        assert "Cód: 0" in out
+        assert "2 líneas" in out
+
+    def test_formato_acotado_trunca_si_excede(self) -> None:
+        contenido = "\n".join(f"linea{i}" for i in range(200))
+        r = self._resultado(contenido)
+        out = r.formato_acotado(max_lineas=50)
+        assert "líneas más omitidas" in out
+        # Solo debe haber 50 líneas de contenido + header + footer
+        lineas_contenido = [ln for ln in out.splitlines() if ln.startswith("linea")]
+        assert len(lineas_contenido) == 50
+
+    def test_formato_acotado_sin_truncar(self) -> None:
+        r = self._resultado("a\nb\n")
+        out = r.formato_acotado(max_lineas=100)
+        assert "[Fin]" in out
+        assert "omitidas" not in out
+
+    def test_formato_acotado_codigo_error(self) -> None:
+        r = self._resultado("error output\n", codigo=1)
+        out = r.formato_acotado()
+        assert "Cód: 1" in out
 
 
 # ---------------------------------------------------------------------------
@@ -607,9 +669,11 @@ class TestAppleScriptError:
             call_count += 1
             return mock_proc_fail if call_count == 1 else mock_proc_ok
 
-        with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
-            with patch("asyncio.sleep", new=AsyncMock()):
-                result = await cs._applescript('tell application "System Events" to get name of process 1')
+        with (
+            patch("asyncio.create_subprocess_exec", side_effect=mock_exec),
+            patch("asyncio.sleep", new=AsyncMock()),
+        ):
+            result = await cs._applescript('tell application "System Events" to get name of process 1')
 
         assert call_count == 2
         assert result == "resultado"
@@ -625,10 +689,12 @@ class TestAppleScriptError:
         stderr_bytes = b'0:1: execution error: Finder got an error: (-1712)\n'
         mock_proc.communicate = AsyncMock(return_value=(b"", stderr_bytes))
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-            with patch("asyncio.sleep", new=AsyncMock()):
-                with pytest.raises(AppleScriptError) as exc_info:
-                    await cs.ejecutar_applescript_estricto('tell application "Finder" to get name of window 1')
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=mock_proc),
+            patch("asyncio.sleep", new=AsyncMock()),
+            pytest.raises(AppleScriptError) as exc_info,
+        ):
+            await cs.ejecutar_applescript_estricto('tell application "Finder" to get name of window 1')
 
         assert exc_info.value.error_code == -1712
 
@@ -771,9 +837,11 @@ class TestFilesystemVerification:
         archivo.write_text("x")
 
         # to_thread no ejecuta unlink, el archivo sigue ahí → falla la verificación
-        with patch("asyncio.to_thread", new=AsyncMock(return_value=None)):
-            with pytest.raises(ActionVerificationError) as exc_info:
-                await fs.eliminar_archivo(archivo)
+        with (
+            patch("asyncio.to_thread", new=AsyncMock(return_value=None)),
+            pytest.raises(ActionVerificationError) as exc_info,
+        ):
+            await fs.eliminar_archivo(archivo)
 
         assert exc_info.value.accion == "eliminar_archivo"
         assert archivo.exists()
@@ -788,9 +856,11 @@ class TestFilesystemVerification:
         origen.write_text("dato")
 
         # to_thread no ejecuta shutil.move, origen sigue ahí
-        with patch("asyncio.to_thread", new=AsyncMock(return_value=None)):
-            with pytest.raises(ActionVerificationError) as exc_info:
-                await fs.mover_archivo(origen, destino)
+        with (
+            patch("asyncio.to_thread", new=AsyncMock(return_value=None)),
+            pytest.raises(ActionVerificationError) as exc_info,
+        ):
+            await fs.mover_archivo(origen, destino)
 
         assert exc_info.value.accion == "mover_archivo"
         assert "origen" in exc_info.value.esperado

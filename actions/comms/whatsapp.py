@@ -101,7 +101,7 @@ class WhatsApp:
         timeout_qr_s: int = 60,
         callback_confirmacion: CallbackConfirmacion | None = None,
         audit_log: AuditLog | None = None,
-    ) -> "WhatsApp":
+    ) -> WhatsApp:
         """Lanza Chromium no-headless con sesión persistente y espera el QR si es necesario.
 
         Si ya existe una sesión válida en session_dir, la reutiliza sin mostrar el QR.

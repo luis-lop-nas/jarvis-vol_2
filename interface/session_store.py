@@ -55,8 +55,6 @@ class SessionStore:
 
     def _serialize_state(self, state: AgentState) -> dict[str, Any]:
         """Convierte AgentState a dict serializable a JSON."""
-        from core.planner import PasoAccion, PlanEjecucion
-        from core.reflector import ResultadoPaso
 
         def _ser_mensaje(m: Any) -> dict:
             return asdict(m) if hasattr(m, "__dataclass_fields__") else dict(m)

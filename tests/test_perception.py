@@ -310,7 +310,6 @@ class TestOCREstrategiaContenido:
     async def test_ocr_strategy_code_region(self) -> None:
         """Región con código Python devuelve PSM 6."""
         import sys
-        from unittest.mock import MagicMock
 
         import perception.ocr as ocr_mod
 
@@ -328,7 +327,6 @@ class TestOCREstrategiaContenido:
     async def test_ocr_strategy_form_region(self) -> None:
         """Región con separadores de tabla devuelve PSM 4."""
         import sys
-        from unittest.mock import MagicMock
 
         import perception.ocr as ocr_mod
 

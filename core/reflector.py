@@ -15,6 +15,12 @@ from core.planner import PasoAccion, PlanEjecucion
 from models.base import BaseModel as _ModelBase
 from models.base import Mensaje
 
+_PROMPT_EXPLAIN = (
+    "Eres el reflector de JARVIS. Explica brevemente por qué falló este paso "
+    "y qué debe evitar el planificador al generar un plan alternativo. "
+    "Máximo 2 frases en español. Sé concreto: menciona el recurso o condición que falló."
+)
+
 log = logging.getLogger(__name__)
 
 RUTA_PROMPT = Path(__file__).parent.parent / "config" / "prompts" / "reflector.md"
@@ -153,6 +159,43 @@ class Reflector:
             max_tokens=256,
         )
         return respuesta.content.strip()
+
+    async def explain_failure(
+        self,
+        paso: PasoAccion,
+        resultado: ResultadoPaso,
+        contexto_sistema: dict[str, Any] | None = None,
+    ) -> str:
+        """Genera una explicación del fallo para enriquecer el contexto de replanificación.
+
+        Patrón JARVIS-1 Self-Explain: el planificador recibe no solo el error crudo
+        sino una explicación natural de por qué falló y qué evitar.
+
+        Ejemplo::
+            exp = await reflector.explain_failure(paso, resultado)
+            nuevo_plan = await planner.replan(paso, plan, f"{error}\\n\\nAnálisis: {exp}")
+        """
+        datos: dict[str, Any] = {
+            "herramienta": paso.herramienta,
+            "descripcion": paso.descripcion,
+            "parametros": paso.parametros,
+            "error": resultado.error,
+        }
+        if contexto_sistema:
+            datos["contexto"] = {k: v for k, v in contexto_sistema.items() if k != "screenshot"}
+        try:
+            respuesta = await self._modelo.complete(
+                [
+                    Mensaje(rol="system", contenido=_PROMPT_EXPLAIN),
+                    Mensaje(rol="user", contenido=orjson.dumps(datos, default=str).decode()),
+                ],
+                temperatura=0.2,
+                max_tokens=150,
+            )
+            return respuesta.content.strip()
+        except Exception:
+            log.debug("explain_failure falló — usando mensaje de error original")
+            return resultado.error or "fallo desconocido"
 
     async def _reflexion_llm(
         self,

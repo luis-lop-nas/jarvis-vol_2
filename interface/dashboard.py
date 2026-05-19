@@ -7,7 +7,6 @@ Protegido por el mismo rate limiting que el resto de la API.
 
 from __future__ import annotations
 
-
 _HTML = """<!DOCTYPE html>
 <html lang="es">
 <head>

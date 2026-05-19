@@ -292,9 +292,8 @@ class Sandbox:
         """
         risk_level = await self.validate_command(command)
 
-        if risk_level == CommandRisk.DANGEROUS and self._docker is not None:
-            if await self._docker.is_available():
-                return await self._run_in_docker(command, cwd=cwd, timeout=timeout, risk_level=risk_level)
+        if risk_level == CommandRisk.DANGEROUS and self._docker is not None and await self._docker.is_available():
+            return await self._run_in_docker(command, cwd=cwd, timeout=timeout, risk_level=risk_level)
 
         return await self._run(command, cwd=cwd, timeout=timeout, env=env, risk_level=risk_level)
 

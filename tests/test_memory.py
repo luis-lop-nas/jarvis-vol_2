@@ -6,12 +6,11 @@ Todos los backends externos están mockeados: ChromaDB, Ollama y 1Password.
 from __future__ import annotations
 
 import math
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
 
 from memory import HealthStatus, MemorySystem
 from memory.episodic import Episode, EpisodicMemory
@@ -563,8 +562,8 @@ async def test_agent_loads_learned_instructions() -> None:
     from core.agent import Agente, AgentState
     from core.planner import Planner
     from core.reflector import Reflector
-    from memory.short_term import ShortTermMemory
     from memory.episodic import EpisodicMemory
+    from memory.short_term import ShortTermMemory
     from security.audit_log import AuditLog
 
     memoria = MagicMock()

@@ -14,7 +14,14 @@ import httpx
 import orjson
 import pytest
 
-from models._common import CircuitBreaker, EstadoCircuito, RetryPolicy, TTLCache, log_model_call, mensaje_a_dict
+from models._common import (
+    CircuitBreaker,
+    EstadoCircuito,
+    RetryPolicy,
+    TTLCache,
+    log_model_call,
+    mensaje_a_dict,
+)
 from models.base import (
     BaseModel,
     Mensaje,
@@ -431,7 +438,6 @@ class TestCircuitBreaker:
         assert cb.is_open() is False
 
     def test_fallos_fuera_de_ventana_no_abren(self) -> None:
-        import time
         cb = CircuitBreaker(max_fallos=3, ventana_s=1.0)
         cb.registrar_fallo()
         cb.registrar_fallo()
@@ -556,9 +562,8 @@ class TestCostesModelos:
 
 class TestLiteLLMAdapter:
     def test_error_cuando_deshabilitado(self) -> None:
-        from unittest.mock import patch
-        from models.litellm_adapter import LiteLLMAdapter, LiteLLMNotEnabledError
         from config import settings as cfg
+        from models.litellm_adapter import LiteLLMAdapter, LiteLLMNotEnabledError
 
         original = cfg.litellm_enabled
         try:

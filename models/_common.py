@@ -202,9 +202,7 @@ class CircuitBreaker:
         """True si el circuito está OPEN (rechaza peticiones)."""
         if self._apertura is None:
             return False
-        if time.monotonic() - self._apertura >= self._tiempo_recuperacion:
-            return False
-        return True
+        return time.monotonic() - self._apertura < self._tiempo_recuperacion
 
     def estado(self) -> EstadoCircuito:
         """Estado actual del circuito."""

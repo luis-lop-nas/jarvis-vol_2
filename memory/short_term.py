@@ -60,7 +60,8 @@ class ShortTermMemory:
         role_filter: list[Literal["user", "assistant", "system", "tool"]] | None = None,
     ) -> list[Message]:
         """Devuelve mensajes recientes opcionalmente filtrados por rol."""
-        mensajes = list(self._buffer)
+        async with self._lock:
+            mensajes = list(self._buffer)
         if role_filter is not None:
             mensajes = [m for m in mensajes if m.role in role_filter]
         if limit is not None:
@@ -69,9 +70,11 @@ class ShortTermMemory:
 
     async def get_context_window(self, max_tokens: int) -> list[Message]:
         """Devuelve los mensajes más recientes que caben en el presupuesto de tokens."""
+        async with self._lock:
+            snapshot = list(self._buffer)
         mensajes: list[Message] = []
         total = 0
-        for mensaje in reversed(self._buffer):
+        for mensaje in reversed(snapshot):
             if total + mensaje.tokens_estimate > max_tokens:
                 break
             mensajes.append(mensaje)
@@ -106,13 +109,16 @@ class ShortTermMemory:
 
     async def get_last_n(self, n: int) -> list[Message]:
         """Devuelve los últimos `n` mensajes de la memoria."""
-        return list(self._buffer)[-n:]
+        async with self._lock:
+            return list(self._buffer)[-n:]
 
     async def search(self, query: str) -> list[Message]:
         """Busca mensajes que contengan el término indicado."""
+        async with self._lock:
+            snapshot = list(self._buffer)
         lower = query.lower()
         return [
-            m for m in self._buffer
+            m for m in snapshot
             if lower in m.content.lower() or any(lower in str(v).lower() for v in m.metadata.values())
         ]
 
@@ -149,6 +155,9 @@ class ShortTermMemory:
     async def _ensure_capacity(self) -> None:
         """Comprime mensajes antiguos hasta respetar límites configurados.
 
+        Libera el lock durante la llamada al LLM para no bloquear lectores.
+        Reacquiere el lock antes de modificar el buffer con el resumen.
+
         Returns:
             None.
         """
@@ -160,7 +169,15 @@ class ShortTermMemory:
                 break
             mitad = max(1, len(self._buffer) // 2)
             antiguos = [self._buffer.popleft() for _ in range(mitad)]
-            resumen = await self.summarize(antiguos)
+
+            # Liberar lock durante el LLM call — los lectores ven el buffer sin
+            # los mensajes antiguos (comprimidos), lo que es un estado consistente.
+            self._lock.release()
+            try:
+                resumen = await self.summarize(antiguos)
+            finally:
+                await self._lock.acquire()
+
             resumen_mensaje = Message(
                 role="system",
                 content=f"Resumen de memoria: {resumen}",

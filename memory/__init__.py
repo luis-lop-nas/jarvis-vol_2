@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -283,15 +284,11 @@ class MemorySystem:
             except Exception:
                 latencia_ms = -1.0
 
-            try:
+            with contextlib.suppress(Exception):
                 total_entradas = await self._long_term.count()
-            except Exception:
-                pass
 
-            try:
+            with contextlib.suppress(Exception):
                 expiradas = await self._long_term.count_expired()
-            except Exception:
-                pass
 
         if not chroma_ok:
             estado_global: Literal["healthy", "degraded", "down"] = "down"

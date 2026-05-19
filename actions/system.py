@@ -504,7 +504,7 @@ class ControlSistema:
                         error_code=-1712,
                         app_name=self._extraer_app(script),
                         suggestion=_SUGERENCIAS_AS.get(-1712, "La app no responde"),
-                    )
+                    ) from None
                 return None
             except FileNotFoundError:
                 return None

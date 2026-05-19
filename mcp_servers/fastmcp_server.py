@@ -12,7 +12,7 @@ import logging
 import sys
 import time
 from collections.abc import Callable
-from typing import Any, Optional
+from typing import Any
 
 try:
     from fastmcp import FastMCP as _FastMCP
@@ -101,7 +101,7 @@ def _make_handler(bus: MCPBus, tool: MCPTool) -> Callable:
                 annotation=annotation,
             )
         else:
-            annotation = Optional[py_type]  # type: ignore[assignment]
+            annotation = py_type | None  # type: ignore[assignment]
             param = inspect.Parameter(
                 name,
                 inspect.Parameter.POSITIONAL_OR_KEYWORD,

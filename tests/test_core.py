@@ -153,6 +153,41 @@ class TestPlanner:
         assert isinstance(nuevo, PlanEjecucion)
         assert nuevo.pasos[0].id == "alt"
 
+    def test_planner_validate_topological_order_invalido(self) -> None:
+        """Paso B depende de paso C que aparece DESPUÉS en el plan → error topológico."""
+        planner = Planner(_mock_modelo())
+        paso_b = PasoAccion(
+            id="b", descripcion="B", herramienta="filesystem.leer",
+            parametros={}, depende_de=["c"],
+        )
+        paso_c = PasoAccion(
+            id="c", descripcion="C", herramienta="filesystem.leer",
+            parametros={},
+        )
+        plan = PlanEjecucion(tarea="test", pasos=[paso_b, paso_c])
+        errores = planner.validate_plan(plan)
+        assert any("topológico" in e for e in errores)
+
+    def test_planner_validate_topological_order_valido(self) -> None:
+        """Paso B depende de paso A que aparece ANTES → sin error topológico."""
+        planner = Planner(_mock_modelo())
+        paso_a = PasoAccion(id="a", descripcion="A", herramienta="filesystem.leer", parametros={})
+        paso_b = PasoAccion(
+            id="b", descripcion="B", herramienta="filesystem.leer",
+            parametros={}, depende_de=["a"],
+        )
+        plan = PlanEjecucion(tarea="test", pasos=[paso_a, paso_b])
+        errores = planner.validate_plan(plan)
+        assert not any("topológico" in e for e in errores)
+
+    @pytest.mark.asyncio
+    async def test_planner_json_invalido_devuelve_aclaracion(self) -> None:
+        """Si el LLM devuelve JSON inválido, plan() devuelve paso de aclaración en lugar de lanzar."""
+        planner = Planner(_mock_modelo("esto no es json válido {{{"))
+        plan = await planner.plan("Haz algo")
+        assert len(plan.pasos) == 1
+        assert plan.pasos[0].herramienta == "pedir_aclaracion"
+
 
 # ---------------------------------------------------------------------------
 # Reflector
@@ -234,6 +269,29 @@ class TestReflector:
         plan = _plan(*pasos)
         resultados = [_resultado("a")]  # "b" no completado pero puede_fallar=True
         assert ref.evaluate_task_completion(plan, resultados) is True
+
+    @pytest.mark.asyncio
+    async def test_reflector_explain_failure_usa_modelo(self) -> None:
+        """explain_failure() llama al modelo y devuelve su respuesta."""
+        modelo = _mock_modelo("El archivo no existe porque la ruta era incorrecta.")
+        ref = Reflector(modelo)
+        paso = _paso("p1")
+        resultado = _resultado("p1", exito=False, error="FileNotFoundError: /tmp/x.txt")
+        explicacion = await ref.explain_failure(paso, resultado)
+        assert "archivo" in explicacion.lower() or len(explicacion) > 0
+        modelo.complete.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_reflector_explain_failure_fallback_si_error(self) -> None:
+        """Si el modelo falla, explain_failure() devuelve el error original."""
+        from unittest.mock import AsyncMock
+        modelo = _mock_modelo()
+        modelo.complete = AsyncMock(side_effect=RuntimeError("API caída"))
+        ref = Reflector(modelo)
+        paso = _paso("p1")
+        resultado = _resultado("p1", exito=False, error="TimeoutError: 30s")
+        explicacion = await ref.explain_failure(paso, resultado)
+        assert explicacion == "TimeoutError: 30s"
 
 
 # ---------------------------------------------------------------------------

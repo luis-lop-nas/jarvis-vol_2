@@ -304,6 +304,49 @@ _(nada activo)_
 
 ---
 
+## ✅ Completado recientemente
+
+### Debug línea a línea — bugs encontrados y corregidos (2026-05-19)
+
+Auditoría exhaustiva del código fuente completo (todos los archivos de `core/`, `memory/`, `security/`, `models/`, `actions/`, `perception/`, `mcp_servers/`, `interface/`, `main.py`).
+
+**Bugs MEDIO corregidos:**
+
+- **`memory/short_term.py`** — Race condition async en `_ensure_capacity()`: los mensajes se extraen del buffer antes del `await self.summarize()` (LLM call), pero los lectores (`get_messages`, `get_context_window`, `get_last_n`, `search`) leían `self._buffer` sin lock, viendo un estado intermedio sin los mensajes eliminados y sin el resumen. **Fix**: (1) todos los lectores ahora adquieren `self._lock` y trabajan sobre un snapshot local; (2) `_ensure_capacity` libera el lock antes de `await self.summarize()` y lo reacquiere en `finally`, evitando bloquear lectores durante el LLM call. ADR-105.
+- **`actions/keyboard_mouse.py`** — `self._pyag` nunca inicializado cuando Quartz disponible: `_inicializar_pyautogui()` solo se llamaba si `not _quartz_disponible`, pero `arrastrar`, `scroll`, `escribir_texto`, `pulsar_tecla`, `atajo`, `tecla_abajo`, `tecla_arriba` accedían a `self._pyag` sin comprobación → `AttributeError` en producción con Quartz disponible. **Fix**: `_inicializar_pyautogui()` se llama siempre (Quartz cubre mouse, pyautogui cubre teclado y drag/scroll). ADR-106.
+- **`interface/api.py`** — `GET /sessions` llamaba `session_store.list_sessions()` de forma síncrona en el event loop, con I/O de disco (`path.stat()`, `path.read_bytes()`) → bloqueo del loop. **Fix**: `await asyncio.to_thread(session_store.list_sessions)`. ADR-107.
+
+**Bugs BAJO corregidos:**
+
+- **`perception/ocr.py`** — `_INDICADORES_CODIGO` definida dos veces: `frozenset` en línea 52 (rica, 18 keywords) y `set` en línea 284 (reducida, 9 keywords). Python usa la última → `_detectar_psm` perdía keywords `fn`, `func`, `var`, `let`, `const`, `//`, `/*`, `#include`, `public`, `private`. **Fix**: eliminada la definición duplicada de línea 284; `_inferir_tipo` reutiliza la `frozenset` global. ADR-108.
+
+**Bugs identificados (sin fix — aceptados o complejidad baja justificación):**
+
+- **`security/auth.py`** — Si la tarea líder de Face ID es cancelada durante `asyncio.to_thread`, el `async with self._lock` en el bloque `finally` puede ser interrumpido por `CancelledError`, dejando `self._in_flight` sin resolver y bloqueando followers indefinidamente. El comentario en línea 100 ya describe este riesgo. Severidad baja en producción (cancellación de biometría es rara). Se documenta como deuda técnica.
+- **`models/openrouter.py`** — `_elegir_free()` sin single-flight: dos llamadas concurrentes antes de cachear pueden hacer doble petición a `/models`. Inofensivo (la segunda escritura sobreescribe la primera con el mismo resultado).
+- **`models/ollama_client.py`** — Variable `respuesta` reutilizada para `httpx.Response` y `ModelResponse` en `complete()`. Confuso pero funcional.
+
+**ADRs**: ADR-105 (ShortTermMemory lock — lectores con snapshot + release durante LLM call), ADR-106 (pyautogui siempre inicializado — Quartz para mouse, pyautogui para teclado y drag; sin atributo condicional), ADR-107 (list_sessions con asyncio.to_thread — I/O disco siempre offloaded), ADR-108 (_INDICADORES_CODIGO única definición — eliminar redefinición que sobreescribía la frozenset rica).
+
+- **Suite: 348/353 verde** (348 = 281 en non-actions + 67 en actions sin playwright/telegram; los 5 deselected son preexistentes: playwright no instalado + telegram). Sin regresiones.
+
+---
+
+### Mejoras core/actions/ — patrones JARVIS-1, SWE-agent e Instructor (2026-05-19)
+
+Basadas en análisis comparativo con Agent-Zero, JARVIS-1, SWE-agent, Letta/MemGPT, Zep/Graphiti, Devon, AgentBench e Instructor.
+
+- **`core/reflector.py`** — `explain_failure(paso, resultado, contexto_sistema)`: genera en lenguaje natural una explicación del por qué falló el paso y qué debe evitar el planificador. Patrón JARVIS-1 Self-Explain. Fallback: si el modelo falla, devuelve el error original sin propagar excepción. Prompt en `_PROMPT_EXPLAIN` (constante módulo).
+- **`core/agent.py`** — En el bloque `REPLANIFICAR`: llama `reflector.explain_failure()` antes de `planner.replan()` e inyecta el análisis como `error_enriquecido = f"{error}\n\nAnálisis del fallo: {explicacion}"`. El planificador recibe contexto rico para generar alternativas más precisas.
+- **`core/planner.py`** — `validate_plan()` añade validación de orden topológico: si un paso B aparece antes que el paso A del que depende, reporta `"violación de orden topológico"`. Implementado con `id_a_indice` dict O(n). Compatible con la detección de ciclos existente.
+- **`core/planner.py`** — `plan()` añade fallback resiliente (patrón Instructor): si `_parsear()` lanza excepción (JSON inválido), loggea WARNING y devuelve un `PlanEjecucion` con un único paso `pedir_aclaracion`. La tarea no se aborta — el agente pregunta al usuario en lugar de crashear.
+- **`actions/terminal.py`** — `ResultadoComando` añade `lineas_stdout: int` (property) y `formato_acotado(max_lineas: int = 100) -> str`: header estructurado `[Comando: X | Dir: Y | Cód: Z | N líneas | Tms]`, cuerpo truncado si excede `max_lineas`, footer `[... N líneas más omitidas]` o `[Fin]`. Patrón SWE-agent bounded observations — da contexto posicional al LLM sobre el output.
+- **ADRs**: ADR-101 (explain_failure en reflector — el replan recibe análisis LLM del fallo, no solo el error crudo; fallback fail-safe devuelve error original), ADR-102 (orden topológico en validate_plan — detección O(n) de forward-references en depende_de; complementa la detección de ciclos existente), ADR-103 (fallback a pedir_aclaracion en plan() — JSON inválido nunca aborta la sesión; el agente sigue vivo y puede recuperarse), ADR-104 (formato_acotado en ResultadoComando — el header da al LLM contexto sin prompt adicional; max_lineas=100 por defecto, ajustable por herramienta).
+- **Tests añadidos** (13): `test_planner_validate_topological_order_invalido`, `test_planner_validate_topological_order_valido`, `test_planner_json_invalido_devuelve_aclaracion`, `test_reflector_explain_failure_usa_modelo`, `test_reflector_explain_failure_fallback_si_error`, `test_lineas_stdout_vacio`, `test_lineas_stdout_una_linea`, `test_lineas_stdout_sin_newline_final`, `test_lineas_stdout_multiple`, `test_formato_acotado_header_presente`, `test_formato_acotado_trunca_si_excede`, `test_formato_acotado_sin_truncar`, `test_formato_acotado_codigo_error`.
+- **Suite: 353/353 verde (+ 1 skip fastmcp) en ~21s** (antes 340).
+
+---
+
 ## ⏳ Siguientes candidatos
 
 1. ~~**Persistencia de sesiones**~~ — resuelto 2026-05-19 (`interface/session_store.py`).
@@ -313,9 +356,12 @@ _(nada activo)_
 5. ~~**Migración FastMCP + scoping herramientas + health check**~~ — resuelto 2026-05-19.
 6. ~~**Mejoras de memoria (Mem0 + Zep + LangMem)**~~ — resuelto 2026-05-19.
 7. ~~**Mejoras robustez core/ (LangGraph interrupt, runaway guard, estimate_complexity, timeout configurable)**~~ — resuelto 2026-05-19.
-8. **Auto-update del overlay** — sistema de versionado + actualización automática desde servidor de distribución. (Pendiente: requiere servidor externo.)
-9. **STT/TTS** — integración Groq Whisper + Kokoro local para interacción por voz.
-10. **Integración n8n** — workflows para notificaciones proactivas y tareas programadas.
+8. ~~**Patrones JARVIS-1 + SWE-agent + Instructor en core/ y actions/**~~ — resuelto 2026-05-19.
+9. **Auto-update del overlay** — sistema de versionado + actualización automática desde servidor de distribución. (Pendiente: requiere servidor externo.)
+10. **STT/TTS** — integración Groq Whisper + Kokoro local para interacción por voz.
+11. **Integración n8n** — workflows para notificaciones proactivas y tareas programadas.
+12. **Zep/Graphiti bi-temporal** — complementar ChromaDB con grafo de conocimiento temporal (bi-temporal edges, retrieval φ→ρ→χ). Patrón documentado en ADR candidato.
+13. **Letta `request_heartbeat`** — el agente señaliza explícitamente si necesita continuar en lugar de que el loop asuma continuación. Cambio en `ActualizacionAgente` + loop de agent.py.
 
 ---
 

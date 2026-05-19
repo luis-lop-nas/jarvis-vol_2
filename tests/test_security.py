@@ -7,11 +7,10 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-from pathlib import Path
 
 from security.audit_log import AuditLog, AuditStats
 from security.auth import AuthError, AuthManager
@@ -905,14 +904,16 @@ class TestDockerSandbox:
         """DockerSandbox.run() ejecuta el comando y devuelve la salida."""
         sandbox = DockerSandbox()
 
-        with patch.object(sandbox, "_force_remove", AsyncMock()):
-            with patch("asyncio.create_subprocess_exec") as mock_exec:
-                proc = AsyncMock()
-                proc.communicate = AsyncMock(return_value=(b"hello\n", b""))
-                proc.returncode = 0
-                mock_exec.return_value = proc
+        with (
+            patch.object(sandbox, "_force_remove", AsyncMock()),
+            patch("asyncio.create_subprocess_exec") as mock_exec,
+        ):
+            proc = AsyncMock()
+            proc.communicate = AsyncMock(return_value=(b"hello\n", b""))
+            proc.returncode = 0
+            mock_exec.return_value = proc
 
-                stdout, stderr, rc = await sandbox.run("echo hello", cwd=Path.home())
+            stdout, stderr, rc = await sandbox.run("echo hello", cwd=Path.home())
 
         assert stdout == "hello\n"
         assert stderr == ""
@@ -927,16 +928,18 @@ class TestDockerSandbox:
         async def mock_force_remove(container_name: str) -> None:
             removed.append(container_name)
 
-        with patch.object(sandbox, "_force_remove", side_effect=mock_force_remove):
-            with patch("asyncio.create_subprocess_exec") as mock_exec:
-                proc = AsyncMock()
-                proc.communicate = AsyncMock(side_effect=TimeoutError())
-                proc.kill = MagicMock()  # kill() es síncrono en asyncio.Process
-                proc.wait = AsyncMock(return_value=-1)
-                mock_exec.return_value = proc
+        with (
+            patch.object(sandbox, "_force_remove", side_effect=mock_force_remove),
+            patch("asyncio.create_subprocess_exec") as mock_exec,
+        ):
+            proc = AsyncMock()
+            proc.communicate = AsyncMock(side_effect=TimeoutError())
+            proc.kill = MagicMock()  # kill() es síncrono en asyncio.Process
+            proc.wait = AsyncMock(return_value=-1)
+            mock_exec.return_value = proc
 
-                with pytest.raises(DockerSandboxError):
-                    await sandbox.run("sleep 100", cwd=Path.home(), timeout=0.01)
+            with pytest.raises(DockerSandboxError):
+                await sandbox.run("sleep 100", cwd=Path.home(), timeout=0.01)
 
         assert len(removed) == 1
         assert removed[0].startswith("jarvis-sandbox-")
@@ -956,15 +959,17 @@ class TestDockerSandbox:
             docker_sandbox=docker,
         )
 
-        with patch.object(docker, "is_available", AsyncMock(return_value=False)):
-            with patch("asyncio.create_subprocess_exec") as mock_exec:
-                proc = AsyncMock()
-                proc.communicate = AsyncMock(return_value=(b"ok\n", b""))
-                proc.returncode = 0
-                proc.pid = 1234
-                mock_exec.return_value = proc
+        with (
+            patch.object(docker, "is_available", AsyncMock(return_value=False)),
+            patch("asyncio.create_subprocess_exec") as mock_exec,
+        ):
+            proc = AsyncMock()
+            proc.communicate = AsyncMock(return_value=(b"ok\n", b""))
+            proc.returncode = 0
+            proc.pid = 1234
+            mock_exec.return_value = proc
 
-                result = await sb.execute_safe("sudo ls")
+            result = await sb.execute_safe("sudo ls")
 
         assert result.exito is True
         # Confirmación fue pedida (camino normal, no Docker)
