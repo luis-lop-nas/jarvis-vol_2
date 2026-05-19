@@ -9,6 +9,7 @@ from perception.accessibility import (
     get_active_window,
     get_browser_page_title,
     get_browser_url,
+    get_element_coordinates,
     get_focused_element,
     get_frontmost_app,
     get_selected_text,
@@ -18,6 +19,7 @@ from perception.accessibility import (
 )
 from perception.ocr import extract_structured, extract_text, extract_text_local, extract_text_vision
 from perception.screenshot import (
+    ALERTA_PANTALLA_ESTATICA,
     capture_region,
     capture_screen,
     capture_to_file,
@@ -31,6 +33,7 @@ from perception.system_state import (
     is_busy,
     watch_state,
 )
+from perception.verifier import ActionVerifier, VerificationResult
 
 __all__ = [
     # screenshot
@@ -39,6 +42,7 @@ __all__ = [
     "capture_window",
     "capture_to_file",
     "encode_for_vision",
+    "ALERTA_PANTALLA_ESTATICA",
     # ocr
     "extract_text",
     "extract_text_local",
@@ -57,6 +61,7 @@ __all__ = [
     "get_browser_url",
     "get_browser_page_title",
     "get_selected_text",
+    "get_element_coordinates",
     "is_app_running",
     "wait_for_element",
     # system_state
@@ -65,4 +70,7 @@ __all__ = [
     "watch_state",
     "is_busy",
     "context_summary",
+    # verifier
+    "ActionVerifier",
+    "VerificationResult",
 ]

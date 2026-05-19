@@ -99,6 +99,10 @@ class Settings(BaseSettings):
     # --- MCP / Observabilidad ---
     mcp_otel_enabled: bool = Field(default=False)
 
+    # --- Percepción ---
+    ocr_confidence_threshold: float = Field(default=0.60, ge=0.0, le=1.0)
+    verifier_pixel_diff_threshold: float = Field(default=0.01, ge=0.0, le=1.0)
+
     # --- Identidad ---
     usuario_nombre: str = Field(default="Usuario")
     zona_horaria: str = Field(default="Europe/Madrid")

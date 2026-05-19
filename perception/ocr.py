@@ -17,7 +17,15 @@ from typing import Any
 # ── Constantes ────────────────────────────────────────────────────────────────
 _TTL_CACHE_S: float = 30.0
 _LIMITE_LOCAL_BYTES: int = 500 * 1024  # 500 KB
-_UMBRAL_CONFIANZA: float = 60.0  # 0-100 según Tesseract
+
+# El umbral de confianza se lee de settings en runtime para que sea configurable.
+# Fallback a 60.0 (escala 0-100) si settings no está disponible.
+def _umbral_confianza() -> float:
+    try:
+        from config.settings import settings
+        return settings.ocr_confidence_threshold * 100.0
+    except Exception:
+        return 60.0
 
 # ── Caché ─────────────────────────────────────────────────────────────────────
 _CACHE: dict[str, tuple[str, float]] = {}
@@ -40,12 +48,65 @@ def _set_cache(image_bytes: bytes, texto: str) -> None:
     _CACHE[_clave(image_bytes)] = (texto, time.monotonic())
 
 
+# ── Detección de tipo de contenido ───────────────────────────────────────────
+_INDICADORES_CODIGO = frozenset({
+    "def ", "class ", "import ", "return ", "if ", "for ", "while ",
+    "{}","};", "=>", "fn ", "func ", "var ", "let ", "const ",
+    "//", "/*", "#include", "public ", "private ",
+})
+_INDICADORES_TABLA = frozenset({
+    "\t\t", "│", "┌", "└", "┐", "┘", "─", "|  ", "  |",
+})
+
+
+def _detectar_psm(image_bytes: bytes) -> int:
+    """Detecta el tipo de contenido de la región y devuelve el PSM de Tesseract adecuado.
+
+    - Código (def, class, import…): PSM 6 (bloque uniforme de texto).
+    - Formulario/tabla (caracteres de tabla, columnas separadas): PSM 4.
+    - Texto corrido: PSM 3 (default automático de Tesseract).
+
+    Ejemplo::
+        psm = _detectar_psm(png_bytes)
+    """
+    try:
+        import pytesseract  # type: ignore[import-not-found]
+        from PIL import Image  # type: ignore[import-not-found]
+
+        muestra = pytesseract.image_to_string(
+            Image.open(io.BytesIO(image_bytes)), lang="spa+eng", config="--psm 3"
+        )
+        if any(ind in muestra for ind in _INDICADORES_CODIGO):
+            return 6
+        if any(ind in muestra for ind in _INDICADORES_TABLA):
+            return 4
+        return 3
+    except Exception:
+        return 3
+
+
 # ── Tesseract ─────────────────────────────────────────────────────────────────
 def _tesseract_texto_sync(image_bytes: bytes) -> str:
     import pytesseract  # type: ignore[import-not-found]
     from PIL import Image  # type: ignore[import-not-found]
 
     return pytesseract.image_to_string(Image.open(io.BytesIO(image_bytes)), lang="spa+eng")
+
+
+def _tesseract_con_psm_sync(image_bytes: bytes, psm: int) -> str:
+    """Ejecuta Tesseract con el PSM indicado para el tipo de contenido detectado.
+
+    Ejemplo::
+        texto = _tesseract_con_psm_sync(png_bytes, psm=6)  # región de código
+    """
+    import pytesseract  # type: ignore[import-not-found]
+    from PIL import Image  # type: ignore[import-not-found]
+
+    return pytesseract.image_to_string(
+        Image.open(io.BytesIO(image_bytes)),
+        lang="spa+eng",
+        config=f"--psm {psm}",
+    )
 
 
 def _tesseract_confianza_sync(image_bytes: bytes) -> float:
@@ -144,10 +205,11 @@ async def extract_text_vision(image_bytes: bytes) -> str:
 
 
 async def extract_text(image_bytes: bytes) -> str:
-    """Extrae texto eligiendo la estrategia automáticamente.
+    """Extrae texto eligiendo la estrategia automáticamente según tamaño y tipo de contenido.
 
-    Imagen > 500 KB: Tesseract primero; si confianza < 60 → Vision API.
-    Imagen ≤ 500 KB: Vision API directamente.
+    - Imagen > 500 KB: detecta tipo de región → Tesseract con PSM adaptativo;
+      si confianza < ocr_confidence_threshold → Vision API.
+    - Imagen ≤ 500 KB: Vision API directamente (más precisa en layouts complejos).
 
     Ejemplo:
         >>> texto = await extract_text(png_bytes)
@@ -158,7 +220,13 @@ async def extract_text(image_bytes: bytes) -> str:
 
     if len(image_bytes) > _LIMITE_LOCAL_BYTES:
         confianza = await asyncio.to_thread(_tesseract_confianza_sync, image_bytes)
-        if confianza >= _UMBRAL_CONFIANZA:
+        if confianza >= _umbral_confianza():
+            psm = await asyncio.to_thread(_detectar_psm, image_bytes)
+            if psm != 3:
+                # Contenido especializado: usar PSM adaptativo
+                texto = await asyncio.to_thread(_tesseract_con_psm_sync, image_bytes, psm)
+                _set_cache(image_bytes, texto)
+                return texto
             return await extract_text_local(image_bytes)
 
     return await extract_text_vision(image_bytes)

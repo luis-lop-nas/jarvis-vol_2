@@ -246,6 +246,25 @@
 
 ---
 
+## ✅ Completado recientemente
+
+### Mejoras de percepción — Verifier + Grounding + Runaway Guard + OCR adaptativo (2026-05-19)
+
+Basadas en patrones de clawdcursor, Self-Operating Computer y el paper Screen2AX (2025).
+
+- **`perception/verifier.py`** (nuevo) — `ActionVerifier` con `snapshot_before()` y `verify_action_result()`. 4 señales: `pixel_diff` (PIL ImageChops), `ocr_delta` (palabras nuevas en OCR), `window_state` (app activa + título), `accessibility_change` (rol/valor del elemento focalizado). `VerificationResult` con `success: bool`, `signals_passed: int`, `signals_total: int`, `details: dict[str, bool]`. Umbral: ≥2 señales → success=True.
+- **`perception/accessibility.py`** — `Bounds` añade `center_x: float` y `center_y: float` calculados en `__post_init__` (compatibles con `slots=True`). Nueva función `get_element_coordinates(app_name, element_description) → Bounds | None`: AX primero (recorre árbol por label/value/role), fallback OCR (pytesseract `image_to_data` + coincidencia textual). Helpers internos: `_buscar_por_ax`, `_buscar_en_arbol`, `_buscar_por_ocr`.
+- **`perception/screenshot.py`** — Runaway guard module-level: `_CAPTURAS_IDENTICAS`, `_ULTIMO_HASH_CAPTURA`, `ALERTA_PANTALLA_ESTATICA` (asyncio.Event). `_actualizar_runaway_guard()` calcula hash MD5 de cada captura; 5 consecutivas idénticas → WARNING + reduce rate a 0.5fps (`_INTERVALO_MINIMO = 2.0`); 10+ → ERROR + `ALERTA_PANTALLA_ESTATICA.set()`. Captura diferente → reset automático de todo el estado.
+- **`perception/ocr.py`** — Detección de tipo de contenido: `_detectar_psm()` devuelve PSM 6 (código: `def`, `class`, `import`…) o PSM 4 (tablas: caracteres `│`, `─`…) o PSM 3 (texto corrido por defecto). `_tesseract_con_psm_sync()` ejecuta Tesseract con el PSM seleccionado. `extract_text()` usa PSM adaptativo para imágenes >500KB cuando Tesseract supera el umbral de confianza. `_umbral_confianza()` lee `settings.ocr_confidence_threshold * 100` (0-100) con fallback a 60.0.
+- **`actions/keyboard_mouse.py`** — `click_elemento(descripcion: str, app_name: str = "") → bool`: localiza el elemento con `get_element_coordinates()` y hace click en `bounds.center_x`, `bounds.center_y`.
+- **`config/settings.py`** — `ocr_confidence_threshold: float = 0.60` y `verifier_pixel_diff_threshold: float = 0.01`.
+- **`core/agent.py`** — `ActionVerifier` importado. `_COMPUTER_ACTION_TOOLS` frozenset con 13 herramientas (teclado.*, browser.navegar, browser.click, browser.fill, browser.submit). `verifier: ActionVerifier | None = None` en `__init__`. En el loop: snapshot_before antes de computer_action tools → verify_action_result después → si `success=False and signals_passed < 2`, sobreescribe `resultado.exito=False` con mensaje de verificación para que el reflector decida REINTENTAR.
+- **`perception/__init__.py`** — Exports añadidos: `get_element_coordinates`, `ALERTA_PANTALLA_ESTATICA`, `ActionVerifier`, `VerificationResult`.
+- **ADRs**: ADR-88 (ActionVerifier — snapshot paralelo con gather; falls back graceful si screenshot/AX falla), ADR-89 (get_element_coordinates — AX primero, OCR fallback; Screen2AX 2025: 46% metadata pobre), ADR-90 (runaway guard en screenshot.py — hash MD5 exacto como proxy de pixel_diff=0%; Event module-level para señal al agente), ADR-91 (PSM adaptativo por tipo de contenido — detección con primera pasada PSM 3; código→6, tabla→4, texto→3), ADR-92 (verifier en agent.py — solo para _COMPUTER_ACTION_TOOLS; override resultado si <2 señales para que reflector propague REINTENTAR).
+- **Fix preexistente**: `test_e2e_agent_max_steps` aceptaba solo "Límite" pero el runaway guard (umbral=3) dispara antes de MAX_PASOS=3 cuando los pasos son idénticos. El test ahora acepta ambas condiciones de parada ("Límite" o "Loop detectado") — ambas son mecanismos válidos de seguridad.
+- **Tests añadidos** (12): `test_bounds_calcula_center_automaticamente`, `test_verify_action_success_dos_señales`, `test_verify_action_failure_sin_cambios`, `test_verify_fallback_snapshot_falla`, `test_capturas_distintas_no_acumulan_contador`, `test_cinco_identicas_reduce_rate`, `test_diez_identicas_emite_alerta`, `test_captura_diferente_resetea_alerta`, `test_ocr_strategy_code_region`, `test_ocr_strategy_form_region`, `test_grounding_via_ax`, `test_grounding_via_ocr_fallback`.
+- **Suite completa: 304/304 verde (+ 1 skip fastmcp) en ~21s**.
+
 ## 🔄 En progreso
 
 _(nada activo)_

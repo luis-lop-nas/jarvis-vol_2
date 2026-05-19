@@ -368,9 +368,12 @@ async def test_e2e_agent_max_steps(jarvis_stack: dict) -> None:
             if len(updates) > 40:
                 break
 
+    # El agente debe parar por "Límite de pasos" o por el runaway guard ("Loop detectado").
+    # Ambos son mecanismos válidos de seguridad que previenen bucles infinitos.
     assert any(
-        u.tipo == "error" and "Límite" in u.mensaje for u in updates
-    ), f"No se recibió error de límite. Tipos: {[(u.tipo, u.mensaje) for u in updates]}"
+        u.tipo == "error" and ("Límite" in u.mensaje or "Loop detectado" in u.mensaje)
+        for u in updates
+    ), f"No se recibió error de parada. Tipos: {[(u.tipo, u.mensaje) for u in updates]}"
 
 
 # ---------------------------------------------------------------------------

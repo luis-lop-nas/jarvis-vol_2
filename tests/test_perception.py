@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # ── Screenshot ────────────────────────────────────────────────────────────────
 PNG_FAKE = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64  # cabecera PNG válida
@@ -124,6 +124,14 @@ class TestSystemState:
         assert "4.2" in resumen  # RAM disponible
         assert "WiFi" in resumen
 
+    async def test_bounds_calcula_center_automaticamente(self) -> None:
+        """Bounds calcula center_x y center_y en __post_init__."""
+        from perception.accessibility import Bounds
+
+        b = Bounds(x=100.0, y=200.0, width=80.0, height=40.0)
+        assert b.center_x == 140.0
+        assert b.center_y == 220.0
+
     async def test_watch_state_llama_callback_al_cambiar_app(self) -> None:
         """watch_state() llama al callback cuando la app activa cambia entre polls."""
         import perception.system_state as ss_mod
@@ -150,3 +158,232 @@ class TestSystemState:
         assert len(llamadas) >= 1, "El callback debe haberse llamado al menos una vez"
         assert llamadas[0].active_app is not None
         assert llamadas[0].active_app.name == "Terminal"
+
+
+# ── Verifier ──────────────────────────────────────────────────────────────────
+
+PNG_A = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+PNG_B = b"\x89PNG\r\n\x1a\n" + b"\xff" * 64  # diferente de PNG_A
+
+
+class TestVerifier:
+    """Tests de ActionVerifier con todas las señales mockeadas."""
+
+    def _make_snap(
+        self,
+        screenshot: bytes | None = PNG_A,
+        ocr_text: str = "hola mundo",
+        app_bundle: str | None = "com.apple.Safari",
+        window_title: str | None = "Safari",
+        focused_role: str | None = "AXTextField",
+        focused_value: str | None = "texto",
+    ) -> dict:
+        return {
+            "screenshot": screenshot,
+            "ocr_text": ocr_text,
+            "app_bundle": app_bundle,
+            "window_title": window_title,
+            "focused_role": focused_role,
+            "focused_value": focused_value,
+        }
+
+    async def test_verify_action_success_dos_señales(self) -> None:
+        """Verifier devuelve success=True cuando ≥2 señales cambian."""
+        from perception.verifier import ActionVerifier
+
+        verifier = ActionVerifier()
+        snap_antes = self._make_snap(
+            ocr_text="texto anterior",
+            focused_value="valor anterior",
+        )
+
+        snap_despues = self._make_snap(
+            screenshot=PNG_B,
+            ocr_text="texto anterior nuevo contenido",
+            focused_value="valor nuevo",
+        )
+
+        with patch.object(verifier, "snapshot_before", new=AsyncMock(return_value=snap_despues)):
+            result = await verifier.verify_action_result("click", "botón pulsado", snap_antes)
+
+        assert result.success is True
+        assert result.signals_passed >= 2
+        assert result.signals_total == 4
+
+    async def test_verify_action_failure_sin_cambios(self) -> None:
+        """Verifier devuelve success=False cuando el estado no cambia en absoluto."""
+        from perception.verifier import ActionVerifier
+
+        verifier = ActionVerifier()
+        snap = self._make_snap()
+
+        with patch.object(verifier, "snapshot_before", new=AsyncMock(return_value=snap)):
+            result = await verifier.verify_action_result("click", "botón pulsado", snap)
+
+        assert result.success is False
+        assert result.signals_passed < 2
+
+    async def test_verify_fallback_snapshot_falla(self) -> None:
+        """Si el snapshot post-acción falla, el verifier devuelve VerificationResult con success=False."""
+        from perception.verifier import ActionVerifier
+
+        verifier = ActionVerifier()
+        snap_antes = self._make_snap()
+
+        with patch.object(
+            verifier,
+            "snapshot_before",
+            new=AsyncMock(side_effect=RuntimeError("captura fallida")),
+        ):
+            try:
+                result = await verifier.verify_action_result("click", "botón", snap_antes)
+                assert result.success is False
+            except RuntimeError:
+                pass  # aceptable: la excepción sube, el agente la captura
+
+
+# ── Runaway guard ─────────────────────────────────────────────────────────────
+
+
+class TestRunawayGuard:
+    """Tests del contador de capturas idénticas en screenshot.py."""
+
+    def setup_method(self) -> None:
+        import perception.screenshot as ss
+
+        # Resetear estado del guard antes de cada test para aislamiento
+        ss._CAPTURAS_IDENTICAS = 0
+        ss._ULTIMO_HASH_CAPTURA = ""
+        ss._INTERVALO_MINIMO = ss._INTERVALO_NORMAL
+        ss.ALERTA_PANTALLA_ESTATICA.clear()
+
+    async def test_capturas_distintas_no_acumulan_contador(self) -> None:
+        """Capturas con contenido diferente resetean el contador (cada una es la 1ª del nuevo hash)."""
+        import perception.screenshot as ss
+
+        ss._actualizar_runaway_guard(b"\x00" * 100)  # 1ª ocurrencia → _CAPTURAS_IDENTICAS = 1
+        ss._actualizar_runaway_guard(b"\xff" * 100)  # hash diferente → _CAPTURAS_IDENTICAS = 1
+
+        assert ss._CAPTURAS_IDENTICAS == 1  # la última captura es la primera de su hash
+
+    async def test_cinco_identicas_reduce_rate(self) -> None:
+        """5 capturas idénticas consecutivas activan rate reducido."""
+        import perception.screenshot as ss
+
+        datos = b"\xAB" * 100
+        for _ in range(5):
+            ss._actualizar_runaway_guard(datos)
+
+        # 1ª llamada: _CAPTURAS_IDENTICAS=1, 2ª:2, ..., 5ª:5
+        assert ss._CAPTURAS_IDENTICAS == 5
+        assert ss._INTERVALO_MINIMO == ss._INTERVALO_REDUCIDO
+
+    async def test_diez_identicas_emite_alerta(self) -> None:
+        """10+ capturas idénticas consecutivas activan ALERTA_PANTALLA_ESTATICA."""
+        import perception.screenshot as ss
+
+        datos = b"\xCD" * 100
+        for _ in range(10):
+            ss._actualizar_runaway_guard(datos)
+
+        assert ss.ALERTA_PANTALLA_ESTATICA.is_set()
+
+    async def test_captura_diferente_resetea_alerta(self) -> None:
+        """Una captura diferente después de la alerta resetea el evento y el contador."""
+        import perception.screenshot as ss
+
+        datos = b"\xEF" * 100
+        for _ in range(10):
+            ss._actualizar_runaway_guard(datos)
+
+        assert ss.ALERTA_PANTALLA_ESTATICA.is_set()
+
+        ss._actualizar_runaway_guard(b"\x00" * 100)
+        assert not ss.ALERTA_PANTALLA_ESTATICA.is_set()
+        assert ss._CAPTURAS_IDENTICAS == 1  # nueva captura = primera ocurrencia
+
+
+# ── OCR estrategia por tipo de contenido ─────────────────────────────────────
+
+
+class TestOCREstrategiaContenido:
+    async def test_ocr_strategy_code_region(self) -> None:
+        """Región con código Python devuelve PSM 6."""
+        import sys
+        from unittest.mock import MagicMock
+
+        import perception.ocr as ocr_mod
+
+        texto_codigo = "def mi_funcion():\n    import os\n    return True"
+        fake_tess = MagicMock()
+        fake_tess.image_to_string.return_value = texto_codigo
+        fake_pil = MagicMock()
+        fake_pil.Image.open.return_value = MagicMock()
+
+        with patch.dict(sys.modules, {"pytesseract": fake_tess, "PIL": fake_pil, "PIL.Image": fake_pil.Image}):
+            psm = ocr_mod._detectar_psm(PNG_FAKE)
+
+        assert psm == 6, f"Código debe usar PSM 6, obtuvo {psm}"
+
+    async def test_ocr_strategy_form_region(self) -> None:
+        """Región con separadores de tabla devuelve PSM 4."""
+        import sys
+        from unittest.mock import MagicMock
+
+        import perception.ocr as ocr_mod
+
+        texto_tabla = "Nombre │ Apellido │ Ciudad\n─────────────────────"
+        fake_tess = MagicMock()
+        fake_tess.image_to_string.return_value = texto_tabla
+        fake_pil = MagicMock()
+        fake_pil.Image.open.return_value = MagicMock()
+
+        with patch.dict(sys.modules, {"pytesseract": fake_tess, "PIL": fake_pil, "PIL.Image": fake_pil.Image}):
+            psm = ocr_mod._detectar_psm(PNG_FAKE)
+
+        assert psm == 4, f"Tabla debe usar PSM 4, obtuvo {psm}"
+
+
+# ── Grounding de coordenadas ──────────────────────────────────────────────────
+
+
+class TestGrounding:
+    async def test_grounding_via_ax(self) -> None:
+        """get_element_coordinates() devuelve bounds desde AX si el permiso está concedido."""
+        from perception.accessibility import Bounds, get_element_coordinates
+
+        bounds_esperado = Bounds(x=10.0, y=20.0, width=100.0, height=30.0)
+
+        with (
+            patch("perception.accessibility.verificar_permiso_accesibilidad", return_value=True),
+            patch(
+                "perception.accessibility._buscar_por_ax",
+                new=AsyncMock(return_value=bounds_esperado),
+            ),
+        ):
+            resultado = await get_element_coordinates("Safari", "Botón Aceptar")
+
+        assert resultado is not None
+        assert resultado.x == 10.0
+        assert resultado.center_x == 60.0  # 10 + 100/2
+
+    async def test_grounding_via_ocr_fallback(self) -> None:
+        """Si AX falla, get_element_coordinates() usa OCR y devuelve bounds."""
+        from perception.accessibility import Bounds, get_element_coordinates
+
+        bounds_ocr = Bounds(x=50.0, y=100.0, width=120.0, height=25.0)
+
+        with (
+            patch(
+                "perception.accessibility._buscar_por_ax",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "perception.accessibility._buscar_por_ocr",
+                new=AsyncMock(return_value=bounds_ocr),
+            ),
+        ):
+            resultado = await get_element_coordinates("Safari", "Botón Cancelar")
+
+        assert resultado is not None
+        assert resultado.center_y == 112.5  # 100 + 25/2

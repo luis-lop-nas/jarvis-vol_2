@@ -23,6 +23,7 @@ from pydantic import BaseModel as _PBase
 
 from config import settings
 from core.mcp_bus import MCPBus
+from perception.verifier import ActionVerifier
 from core.planner import PasoAccion, PlanEjecucion, Planner
 from core.reflector import DecisionReflexion, Reflector, ResultadoPaso
 from memory import Episode, MemorySystem
@@ -40,6 +41,23 @@ TIMEOUT_TAREA_GLOBAL = 1800.0  # 30 min — previene DoS por tareas infinitas
 
 _RUNAWAY_VENTANA = 6   # pasos consecutivos que se inspeccionan
 _RUNAWAY_UMBRAL = 3    # veces que la misma (herramienta, params) dispara el guard
+
+# Herramientas que interactúan directamente con la pantalla y requieren verificación
+_COMPUTER_ACTION_TOOLS: frozenset[str] = frozenset({
+    "teclado.click",
+    "teclado.doble_click",
+    "teclado.click_derecho",
+    "teclado.click_elemento",
+    "teclado.mover_a",
+    "teclado.arrastrar",
+    "teclado.escribir_texto",
+    "teclado.atajo",
+    "teclado.scroll",
+    "browser.navegar",
+    "browser.click",
+    "browser.fill",
+    "browser.submit",
+})
 
 # Claves de kwargs que no puede inyectar el LLM (sobreescribirían defaults de seguridad)
 _PARAMS_PROHIBIDOS: frozenset[str] = frozenset({
@@ -119,6 +137,7 @@ class Agente:
         callback_confirmacion: Callable[[str], asyncio.Future[bool]] | None = None,
         memoria: MemorySystem | None = None,
         mcp_bus: MCPBus | None = None,
+        verifier: ActionVerifier | None = None,
     ) -> None:
         self._planner = planner
         self._reflector = reflector
@@ -129,6 +148,7 @@ class Agente:
         self._herramientas: dict[str, Callable[..., Any]] = herramientas or {}
         self._confirmar = callback_confirmacion or _denegar_por_defecto
         self._mcp_bus = mcp_bus
+        self._verifier: ActionVerifier | None = verifier
 
         # Sesiones activas. Cada sesión tiene su propio lock para evitar race conditions
         # entre run(), resume() y cancel() concurrentes.
@@ -320,6 +340,15 @@ class Agente:
                     mensaje=paso.descripcion,
                     progreso=progreso,
                 )
+
+                # Snapshot pre-acción para verificación (solo computer_action tools)
+                snapshot_pre: dict[str, Any] | None = None
+                if self._verifier and paso.herramienta in _COMPUTER_ACTION_TOOLS:
+                    try:
+                        snapshot_pre = await self._verifier.snapshot_before()
+                    except Exception:
+                        log.debug("Error capturando snapshot pre-acción para '%s'", paso.herramienta)
+
                 resultado = await self._ejecutar_herramienta(paso, sid)
                 pasos_ejecutados += 1
 
@@ -336,6 +365,34 @@ class Agente:
                     "paso_ejecutado",
                     {"paso": paso.id, "exito": resultado.exito, "error": resultado.error},
                 )
+
+                # Verificación post-acción (computer_action tools con verifier activo)
+                if snapshot_pre is not None and self._verifier is not None:
+                    try:
+                        verif = await self._verifier.verify_action_result(
+                            paso.herramienta, paso.descripcion, snapshot_pre
+                        )
+                        if not verif.success and verif.signals_passed < 2:
+                            log.warning(
+                                "Verificación fallida para '%s': %d/%d señales. "
+                                "Forzando REINTENTAR.",
+                                paso.herramienta,
+                                verif.signals_passed,
+                                verif.signals_total,
+                            )
+                            resultado = ResultadoPaso(
+                                id_paso=resultado.id_paso,
+                                exito=False,
+                                salida=resultado.salida,
+                                error=(
+                                    f"Verificación post-acción fallida: {verif.signals_passed}/"
+                                    f"{verif.signals_total} señales. Detalles: {verif.details}"
+                                ),
+                                duracion_ms=resultado.duracion_ms,
+                                efectos_secundarios=resultado.efectos_secundarios,
+                            )
+                    except Exception:
+                        log.debug("Error en verificación post-acción para '%s'", paso.herramienta)
 
                 # Reflexionar
                 todos = completados_new + fallidos_new

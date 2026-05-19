@@ -234,6 +234,29 @@ class RatonTeclado:
             log.debug("Quartz click falló: %s", e)
             return False
 
+    async def click_elemento(self, descripcion: str, app_name: str = "") -> bool:
+        """Hace click en el elemento identificado por su descripción textual.
+
+        Usa get_element_coordinates() para localizar el elemento: AX primero,
+        OCR como fallback si AX falla o devuelve metadata pobre (Screen2AX 2025).
+
+        Ejemplo::
+            await rt.click_elemento("Botón Aceptar", app_name="Safari")
+        """
+        try:
+            from perception.accessibility import get_element_coordinates
+
+            bounds = await get_element_coordinates(app_name, descripcion)
+        except Exception as exc:
+            log.warning("get_element_coordinates falló para '%s': %s", descripcion, exc)
+            return False
+
+        if bounds is None:
+            log.warning("Elemento no encontrado: '%s' en '%s'", descripcion, app_name)
+            return False
+
+        return await self.click(int(bounds.center_x), int(bounds.center_y))
+
     async def doble_click(self, x: int, y: int) -> bool:
         """Doble-click en (x, y).
 

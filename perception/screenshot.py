@@ -9,20 +9,35 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import io
+import logging
 import subprocess
 import time
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 # ── Rate limiter ─────────────────────────────────────────────────────────────
 # Máximo 2 capturas/segundo en todo el proceso para no saturar el pipeline.
 _CAPTURE_LOCK = asyncio.Lock()
 _ULTIMA_CAPTURA: float = 0.0
-_INTERVALO_MINIMO: float = 0.5
+_INTERVALO_MINIMO: float = 0.5  # segundos → 2fps máximo
+
+# ── Runaway guard ─────────────────────────────────────────────────────────────
+# Detecta si la pantalla lleva N capturas sin cambiar (pixel_diff ≈ 0%).
+_CAPTURAS_IDENTICAS: int = 0
+_ULTIMO_HASH_CAPTURA: str = ""
+ALERTA_PANTALLA_ESTATICA: asyncio.Event = asyncio.Event()  # señal al agente
+
+_RUNAWAY_UMBRAL_ADVERTENCIA = 5    # capturas → reducir a 0.5fps
+_RUNAWAY_UMBRAL_ALERTA = 10        # capturas → emitir señal al agente
+_INTERVALO_REDUCIDO: float = 2.0   # segundos → 0.5fps
+_INTERVALO_NORMAL: float = 0.5     # segundos → 2fps (mantener constante del módulo)
 
 
 async def _throttle() -> None:
-    """Garantiza que no se superen 2 capturas/segundo."""
+    """Garantiza que no se superen 2 capturas/segundo (o 0.5fps si el guard está activo)."""
     global _ULTIMA_CAPTURA
     async with _CAPTURE_LOCK:
         ahora = time.monotonic()
@@ -30,6 +45,42 @@ async def _throttle() -> None:
         if espera > 0:
             await asyncio.sleep(espera)
         _ULTIMA_CAPTURA = time.monotonic()
+
+
+def _actualizar_runaway_guard(png_bytes: bytes) -> None:
+    """Actualiza el contador de capturas idénticas y actúa si se supera el umbral.
+
+    Una captura se considera idéntica si su hash MD5 coincide exactamente con la
+    anterior (pixel_diff = 0%, que es < 1%). El guard existe para prevenir que el
+    agente consuma recursos procesando frames estáticos en bucle.
+    """
+    global _CAPTURAS_IDENTICAS, _ULTIMO_HASH_CAPTURA, _INTERVALO_MINIMO
+
+    hash_actual = hashlib.md5(png_bytes, usedforsecurity=False).hexdigest()  # noqa: S324
+    if hash_actual == _ULTIMO_HASH_CAPTURA:
+        _CAPTURAS_IDENTICAS += 1
+    else:
+        # Nueva captura diferente: cuenta como primera ocurrencia del nuevo hash
+        _CAPTURAS_IDENTICAS = 1
+        _ULTIMO_HASH_CAPTURA = hash_actual
+        _INTERVALO_MINIMO = _INTERVALO_NORMAL
+        ALERTA_PANTALLA_ESTATICA.clear()
+        return
+
+    if _CAPTURAS_IDENTICAS == _RUNAWAY_UMBRAL_ADVERTENCIA:
+        log.warning(
+            "Runaway guard: %d capturas consecutivas idénticas. "
+            "Reduciendo rate a 0.5fps.",
+            _CAPTURAS_IDENTICAS,
+        )
+        _INTERVALO_MINIMO = _INTERVALO_REDUCIDO
+    elif _CAPTURAS_IDENTICAS >= _RUNAWAY_UMBRAL_ALERTA:
+        log.error(
+            "Runaway guard: %d capturas idénticas consecutivas. "
+            "Emitiendo ALERTA_PANTALLA_ESTATICA.",
+            _CAPTURAS_IDENTICAS,
+        )
+        ALERTA_PANTALLA_ESTATICA.set()
 
 
 # ── Escala retina ─────────────────────────────────────────────────────────────
@@ -69,13 +120,18 @@ def _run_screencapture(*extra_args: str) -> bytes:
 async def capture_screen() -> bytes:
     """Captura la pantalla principal a escala 1x. PNG en bytes, sin tocar disco.
 
+    Actualiza el runaway guard: si la pantalla lleva ≥5 capturas sin cambiar,
+    reduce automáticamente el rate; si llega a 10, emite ALERTA_PANTALLA_ESTATICA.
+
     Ejemplo:
         >>> png = await capture_screen()
         >>> assert png[:4] == b'\\x89PNG'
     """
     await _throttle()
     raw = await asyncio.to_thread(_run_screencapture)
-    return _normalizar_a_1x(raw)
+    normalizado = _normalizar_a_1x(raw)
+    _actualizar_runaway_guard(normalizado)
+    return normalizado
 
 
 async def capture_region(x: int, y: int, width: int, height: int) -> bytes:

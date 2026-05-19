@@ -10,8 +10,11 @@ Si no está concedido, todas las funciones devuelven None en lugar de lanzar.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 
 # ── Modelos de datos ──────────────────────────────────────────────────────────
@@ -29,12 +32,21 @@ class AppInfo:
 
 @dataclass(slots=True)
 class Bounds:
-    """Rectángulo en coordenadas de pantalla (puntos, no píxeles físicos)."""
+    """Rectángulo en coordenadas de pantalla (puntos, no píxeles físicos).
+
+    center_x y center_y se calculan automáticamente en __post_init__.
+    """
 
     x: float
     y: float
     width: float
     height: float
+    center_x: float = field(init=False, repr=False)
+    center_y: float = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.center_x = self.x + self.width / 2
+        self.center_y = self.y + self.height / 2
 
     def __str__(self) -> str:
         return f"({self.x:.0f}, {self.y:.0f}, {self.width:.0f}×{self.height:.0f})"
@@ -411,6 +423,120 @@ async def is_app_running(bundle_id: str) -> bool:
         True
     """
     return await asyncio.to_thread(_is_app_running_sync, bundle_id)
+
+
+async def get_element_coordinates(
+    app_name: str, element_description: str
+) -> Bounds | None:
+    """Localiza un elemento UI por descripción. AX primero, OCR como fallback.
+
+    Recorre el árbol AXUIElement buscando el elemento cuyo label/value/title
+    coincide con element_description. Si AX falla o no encuentra el elemento
+    (Screen2AX 2025: 46% de apps con metadata pobre), intenta OCR sobre el
+    screenshot y devuelve el bounding box del texto más parecido.
+
+    Ejemplo::
+        b = await get_element_coordinates("Safari", "Botón Nueva Pestaña")
+        if b:
+            await raton.click(int(b.center_x), int(b.center_y))
+    """
+    bounds = await _buscar_por_ax(app_name, element_description)
+    if bounds is not None:
+        return bounds
+    log.debug(
+        "AX no encontró '%s' en '%s'; usando OCR como fallback.",
+        element_description,
+        app_name,
+    )
+    return await _buscar_por_ocr(element_description)
+
+
+async def _buscar_por_ax(app_name: str, element_description: str) -> Bounds | None:
+    """Busca el elemento en el árbol AX de la app indicada."""
+    if not verificar_permiso_accesibilidad():
+        return None
+    try:
+        from AppKit import NSWorkspace  # type: ignore[import-not-found]
+
+        apps_en_ejecucion = await asyncio.to_thread(
+            lambda: list(NSWorkspace.sharedWorkspace().runningApplications())
+        )
+        pid: int | None = None
+        for app in apps_en_ejecucion:
+            nombre = str(app.localizedName() or "")
+            bundle = str(app.bundleIdentifier() or "")
+            if app_name.lower() in nombre.lower() or app_name.lower() in bundle.lower():
+                pid = int(app.processIdentifier())
+                break
+        if pid is None:
+            return None
+
+        arbol = await asyncio.to_thread(_get_window_tree_sync, pid)
+        if arbol is None:
+            return None
+        return _buscar_en_arbol(arbol, element_description.lower())
+    except Exception as exc:
+        log.debug("AX grounding falló: %s", exc)
+        return None
+
+
+def _buscar_en_arbol(arbol: ElementTree, descripcion: str) -> Bounds | None:
+    """Recorre el árbol AX buscando el elemento cuya label/value coincide con descripcion."""
+    info = arbol.element
+    candidatos = [
+        str(info.value or "").lower(),
+        str(info.placeholder or "").lower(),
+        str(info.role or "").lower(),
+    ]
+    if any(descripcion in c for c in candidatos if c):
+        if info.bounds is not None:
+            return info.bounds
+    for hijo in arbol.children:
+        resultado = _buscar_en_arbol(hijo, descripcion)
+        if resultado is not None:
+            return resultado
+    return None
+
+
+async def _buscar_por_ocr(element_description: str) -> Bounds | None:
+    """Captura pantalla y localiza el texto de element_description con Tesseract."""
+    try:
+        from perception.screenshot import capture_screen
+
+        png = await capture_screen()
+
+        import io
+
+        import pytesseract  # type: ignore[import-not-found]
+        from PIL import Image  # type: ignore[import-not-found]
+
+        datos = await asyncio.to_thread(
+            pytesseract.image_to_data,
+            Image.open(io.BytesIO(png)),
+            output_type=pytesseract.Output.DICT,
+        )
+
+        desc_lower = element_description.lower()
+        mejor_conf: float = -1.0
+        mejor_bounds: Bounds | None = None
+
+        for i, texto in enumerate(datos["text"]):
+            if not str(texto).strip():
+                continue
+            if desc_lower in str(texto).lower():
+                conf = float(datos["conf"][i])
+                if conf > mejor_conf:
+                    mejor_conf = conf
+                    x = float(datos["left"][i])
+                    y = float(datos["top"][i])
+                    w = float(datos["width"][i])
+                    h = float(datos["height"][i])
+                    mejor_bounds = Bounds(x=x, y=y, width=w, height=h)
+
+        return mejor_bounds
+    except Exception as exc:
+        log.debug("OCR grounding falló: %s", exc)
+        return None
 
 
 async def wait_for_element(
