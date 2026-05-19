@@ -167,6 +167,21 @@
 
 ## ✅ Completado recientemente
 
+### Mejoras de robustez core/ (2026-05-19)
+
+- **`requirements.txt`** — `langgraph>=0.2.31` (antes `>=0.2.0`). Habilita `langgraph.types.interrupt()` nativo.
+- **`config/settings.py`** — `agent_step_timeout_seconds: int = 120`. `TIMEOUT_PASO` ya no está hardcodeado en `agent.py`.
+- **`core/planner.py`** — `PasoAccion` añade `timeout_override: int | None = None` para pasos con latencia atípica (ej. `browser.navegar`). `estimate_complexity()` añade 4 señales nuevas: keywords masivos (`todos`, `todos los archivos`, `todo el proyecto`) +0.15; plan con >4 herramientas distintas +0.2; plan con herramientas destructivas (`filesystem.eliminar`, `terminal.ejecutar`) +0.15; historial >20 mensajes +0.1. Parámetros opcionales `historial` y `plan` mantienen compatibilidad hacia atrás.
+- **`core/agent.py`**:
+  - `TIMEOUT_PASO` eliminado; reemplazado por `settings.agent_step_timeout_seconds`. `_ejecutar_herramienta` usa `paso.timeout_override` si está presente (ADR-87).
+  - `_esperar_usuario(sid, evento) → (cancelado, aprobado)`: helper que encapsula el patrón asyncio.Event + Lock (ADR-27), elimina duplicación de los dos bloques WAIT_USER y prepara la interfaz para `graph.interrupt()` (ADR-84).
+  - **Runaway guard** (patrón OpenHands): `_RUNAWAY_VENTANA=6`, `_RUNAWAY_UMBRAL=3`. Antes de ejecutar cada paso se acumula `(herramienta, _hash_params(params))` en `AgentState.tool_call_history` (lista circular maxlen=6). Si la misma tupla aparece ≥3 veces: `tipo=error` "Loop detectado" + return inmediato sin ejecutar (ADR-85).
+  - `_hash_params()`: fingerprint MD5 reproducible de parámetros para el guard (sin use for security).
+  - `AgentState` añade `tool_call_history: list[tuple[str, str]]`.
+- **`tests/test_core.py`** — `test_agent_runaway_guard`: plan con 4 pasos idénticos (misma herramienta, mismos params); el 3er dispara el guard antes de ejecutar y emite `tipo=error` con "Loop detectado".
+- **ADRs**: ADR-84 (WAIT_USER → _esperar_usuario() helper; interfaz preparada para graph.interrupt() cuando el loop use graph.astream()), ADR-85 (runaway guard con list circular maxlen=6 en AgentState — lista en lugar de deque para compatibilidad con serialización JSON del SessionStore), ADR-86 (estimate_complexity() con 4 señales adicionales — parámetros opcionales para no romper router.py), ADR-87 (agent_step_timeout_seconds en settings; timeout_override por paso).
+- **Suite: 274/274 verde (+ 1 skip fastmcp) en ~20s** (antes 266).
+
 ### Persistencia de sesiones + Dashboard + WebSocket state + Distribución overlay (2026-05-19)
 
 - **`interface/session_store.py`** (nuevo) — `SessionStore`: serializa `AgentState` a JSON en `~/.jarvis/sessions/{session_id}.json` tras cada `ActualizacionAgente`. Al restaurar: si `waiting_for_user=True` con paso pendiente → se marca como fallido + `waiting_for_user=False` para forzar replanificación. `load()` verifica TTL y elimina expiradas. `cleanup_expired()` (async) escanea el directorio, elimina expiradas y corruptas. `list_sessions()` devuelve metadatos para el dashboard.
@@ -245,9 +260,10 @@ _(nada activo)_
 4. ~~**Scoping de confirmaciones por sesión**~~ — resuelto 2026-05-19 (hallazgo crítico del auditor).
 5. ~~**Migración FastMCP + scoping herramientas + health check**~~ — resuelto 2026-05-19.
 6. ~~**Mejoras de memoria (Mem0 + Zep + LangMem)**~~ — resuelto 2026-05-19.
-7. **Auto-update del overlay** — sistema de versionado + actualización automática desde servidor de distribución. (Pendiente: requiere servidor externo.)
-8. **STT/TTS** — integración Groq Whisper + Kokoro local para interacción por voz.
-9. **Integración n8n** — workflows para notificaciones proactivas y tareas programadas.
+7. ~~**Mejoras robustez core/ (LangGraph interrupt, runaway guard, estimate_complexity, timeout configurable)**~~ — resuelto 2026-05-19.
+8. **Auto-update del overlay** — sistema de versionado + actualización automática desde servidor de distribución. (Pendiente: requiere servidor externo.)
+9. **STT/TTS** — integración Groq Whisper + Kokoro local para interacción por voz.
+10. **Integración n8n** — workflows para notificaciones proactivas y tareas programadas.
 
 ---
 

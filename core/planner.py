@@ -53,6 +53,8 @@ _KW_SENSIBLE = (
     "contraseña", "password", "token", "secreto", "privado",
     "credencial", "dni", "tarjeta", "cuenta bancaria", "api key",
 )
+_KW_MASIVO = ("todos los archivos", "todo el proyecto", "todos")
+_HERRAMIENTAS_DESTRUCTIVAS: frozenset[str] = frozenset({"filesystem.eliminar", "terminal.ejecutar"})
 
 
 class PasoAccion(_PBase):
@@ -72,6 +74,7 @@ class PasoAccion(_PBase):
     depende_de: list[str] = Field(default_factory=list)
     duracion_estimada_ms: int = 500
     puede_fallar: bool = False
+    timeout_override: int | None = None
 
 
 class PlanEjecucion(_PBase):
@@ -207,8 +210,22 @@ class Planner:
 
         return errores
 
-    def estimate_complexity(self, tarea: str) -> float:
+    def estimate_complexity(
+        self,
+        tarea: str,
+        historial: list[Mensaje] | None = None,
+        plan: PlanEjecucion | None = None,
+    ) -> float:
         """Estima la complejidad de una tarea (0.0 trivial → 1.0 muy compleja).
+
+        Señales utilizadas:
+        - Keywords de complejidad (implementa, diseña…): +0.15 c/u
+        - Tarea >20 palabras: +0.2
+        - Palabras clave de datos sensibles: +0.1
+        - Keywords masivos (todos, todos los archivos, todo el proyecto): +0.15
+        - Plan con >4 herramientas distintas: +0.2
+        - Plan con herramientas destructivas (filesystem.eliminar, terminal.ejecutar): +0.15
+        - Historial de mensajes >20 entradas: +0.1
 
         Ejemplo::
             c = planner.estimate_complexity("abre Safari")  # ~0.1
@@ -218,6 +235,16 @@ class Planner:
         if len(tarea.split()) > 20:
             puntos += 0.2
         if any(s in lower for s in _KW_SENSIBLE):
+            puntos += 0.1
+        if any(kw in lower for kw in _KW_MASIVO):
+            puntos += 0.15
+        if plan is not None:
+            herramientas_plan = {p.herramienta for p in plan.pasos}
+            if len(herramientas_plan) > 4:
+                puntos += 0.2
+            if herramientas_plan & _HERRAMIENTAS_DESTRUCTIVAS:
+                puntos += 0.15
+        if historial is not None and len(historial) > 20:
             puntos += 0.1
         return min(1.0, puntos)
 

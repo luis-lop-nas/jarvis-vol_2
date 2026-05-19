@@ -9,8 +9,11 @@ específicas de versión.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import time
+from collections import deque
 from collections.abc import AsyncGenerator, Callable
 from datetime import UTC, datetime
 from typing import Any, TypedDict
@@ -33,8 +36,10 @@ log = logging.getLogger(__name__)
 MAX_PASOS = 50
 MAX_REINTENTOS = 3
 MAX_REPLANES = 3
-TIMEOUT_PASO = 120.0
 TIMEOUT_TAREA_GLOBAL = 1800.0  # 30 min — previene DoS por tareas infinitas
+
+_RUNAWAY_VENTANA = 6   # pasos consecutivos que se inspeccionan
+_RUNAWAY_UMBRAL = 3    # veces que la misma (herramienta, params) dispara el guard
 
 # Claves de kwargs que no puede inyectar el LLM (sobreescribirían defaults de seguridad)
 _PARAMS_PROHIBIDOS: frozenset[str] = frozenset({
@@ -66,6 +71,7 @@ class AgentState(TypedDict, total=False):
     session_id: str
     indice_paso_actual: int
     tarea_completada: bool
+    tool_call_history: list[tuple[str, str]]  # buffer circular maxlen=_RUNAWAY_VENTANA
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +203,7 @@ class Agente:
                 "session_id": sid,
                 "indice_paso_actual": 0,
                 "tarea_completada": False,
+                "tool_call_history": [],
             }
         self._estados[sid] = estado
         inicio = time.monotonic()
@@ -277,17 +284,34 @@ class Agente:
                         mensaje=f"Confirmación requerida: {paso.descripcion}",
                         progreso=progreso,
                     )
-                    await evento.wait()
-                    evento.clear()
-
-                    if sid in self._cancelaciones:
+                    cancelado, aprobado = await self._esperar_usuario(sid, evento)
+                    if cancelado:
                         yield ActualizacionAgente(tipo="error", mensaje="Cancelado.", progreso=1.0)
                         return
-
-                    aprobado = self._respuestas_resume.pop(sid, False)
                     if not aprobado:
                         estado = {**estado, "abort_reason": f"Paso '{paso.id}' rechazado."}
                         continue
+
+                # Runaway guard: abortar si la misma herramienta+params se repite en la ventana
+                hash_params = _hash_params(paso.parametros)
+                hist = estado.get("tool_call_history", [])
+                hist = (hist + [(paso.herramienta, hash_params)])[-_RUNAWAY_VENTANA:]
+                estado = {**estado, "tool_call_history": hist}
+                self._estados[sid] = estado
+
+                repeticiones = sum(
+                    1 for h, p in hist if h == paso.herramienta and p == hash_params
+                )
+                if repeticiones >= _RUNAWAY_UMBRAL:
+                    yield ActualizacionAgente(
+                        tipo="error",
+                        mensaje=(
+                            f"Loop detectado: {paso.herramienta} llamada "
+                            f"{repeticiones} veces con parámetros idénticos. Abortando."
+                        ),
+                        progreso=1.0,
+                    )
+                    return
 
                 # Actuar
                 yield ActualizacionAgente(
@@ -363,14 +387,10 @@ class Agente:
                         mensaje="Esperando decisión del usuario.",
                         progreso=progreso,
                     )
-                    await evento.wait()
-                    evento.clear()
-
-                    if sid in self._cancelaciones:
+                    cancelado, aprobado = await self._esperar_usuario(sid, evento)
+                    if cancelado:
                         yield ActualizacionAgente(tipo="error", mensaje="Cancelado.", progreso=1.0)
                         return
-
-                    aprobado = self._respuestas_resume.pop(sid, False)
                     if aprobado:
                         estado = {**estado, "indice_paso_actual": indice + 1, "retry_count": 0}
                     else:
@@ -520,6 +540,27 @@ class Agente:
                 return {**state, "abort_reason": f"Error al planificar: {exc}"}
         return state
 
+    async def _esperar_usuario(
+        self, sid: str, evento: asyncio.Event
+    ) -> tuple[bool, bool]:
+        """Suspende el loop hasta que el usuario confirme o cancele.
+
+        Devuelve (cancelado, aprobado). El lock por sesión (ADR-27) protege
+        la escritura de _respuestas_resume en resume()/cancel(); esta coroutine
+        solo hace await sobre el Event ya asignado.
+
+        Preparada para migrar a langgraph.types.interrupt() cuando el loop
+        principal use graph.astream() (ADR-84).
+
+        Ejemplo::
+            cancelado, aprobado = await agente._esperar_usuario(sid, evento)
+        """
+        await evento.wait()
+        evento.clear()
+        cancelado = sid in self._cancelaciones
+        aprobado = not cancelado and self._respuestas_resume.pop(sid, False)
+        return cancelado, aprobado
+
     # ------------------------------------------------------------------
     # Ejecución de herramientas
     # ------------------------------------------------------------------
@@ -567,13 +608,19 @@ class Agente:
                     efectos_secundarios=resultado_mcp.side_effects,
                 )
 
+            timeout_paso = float(
+                paso.timeout_override
+                if paso.timeout_override is not None
+                else settings.agent_step_timeout_seconds
+            )
+
             if asyncio.iscoroutinefunction(fn):
                 coro = fn(**paso.parametros)
             else:
                 coro = asyncio.to_thread(fn, **paso.parametros)
 
             tarea: asyncio.Task[object] = asyncio.create_task(
-                asyncio.wait_for(coro, timeout=TIMEOUT_PASO)
+                asyncio.wait_for(coro, timeout=timeout_paso)
             )
             if session_id:
                 self._tareas_paso[session_id] = tarea  # type: ignore[assignment]
@@ -583,11 +630,16 @@ class Agente:
             return ResultadoPaso(id_paso=paso.id, exito=True, salida=salida, duracion_ms=duracion)
 
         except TimeoutError:
+            timeout_usado = float(
+                paso.timeout_override
+                if paso.timeout_override is not None
+                else settings.agent_step_timeout_seconds
+            )
             duracion = int((time.monotonic() - inicio) * 1000)
             return ResultadoPaso(
                 id_paso=paso.id,
                 exito=False,
-                error=f"TimeoutError: paso superó {TIMEOUT_PASO:.0f}s",
+                error=f"TimeoutError: paso superó {timeout_usado:.0f}s",
                 duracion_ms=duracion,
             )
         except asyncio.CancelledError:
@@ -614,6 +666,19 @@ class Agente:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _hash_params(params: dict[str, Any]) -> str:
+    """Fingerprint reproducible de un dict de parámetros para el runaway guard.
+
+    Ejemplo::
+        assert _hash_params({"a": 1}) == _hash_params({"a": 1})
+    """
+    try:
+        serializado = json.dumps(params, sort_keys=True, default=str)
+        return hashlib.md5(serializado.encode(), usedforsecurity=False).hexdigest()
+    except Exception:
+        return repr(params)
 
 
 async def _denegar_por_defecto(descripcion: str) -> bool:

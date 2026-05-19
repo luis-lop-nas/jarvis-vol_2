@@ -90,6 +90,9 @@ class Settings(BaseSettings):
     sandbox_enabled: bool = Field(default=True)
     security_docker_sandbox_enabled: bool = Field(default=False)
 
+    # --- Agente ---
+    agent_step_timeout_seconds: int = Field(default=120, ge=1)
+
     # --- Sesiones ---
     session_ttl_hours: int = Field(default=24, ge=1)
 

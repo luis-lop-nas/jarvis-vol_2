@@ -444,3 +444,45 @@ class TestAgente:
         ultimo = actualizaciones[-1]
         assert ultimo.tipo == "listo"
         assert "Leí" in ultimo.mensaje or ultimo.progreso == 1.0
+
+    @pytest.mark.asyncio
+    async def test_agent_runaway_guard(self) -> None:
+        """La misma herramienta con parámetros idénticos 3 veces en ventana de 6 → tipo=error."""
+        # Plan con 4 pasos idénticos: el 3er dispara el guard antes de ejecutar
+        json_plan = """
+        {
+          "objetivo": "test loop",
+          "pasos": [
+            {"id": "p1", "descripcion": "paso 1", "herramienta": "filesystem.leer",
+             "parametros": {"ruta": "/mismo"}, "requiere_confirmacion": false,
+             "depende_de": [], "duracion_estimada_ms": 100, "puede_fallar": false},
+            {"id": "p2", "descripcion": "paso 2", "herramienta": "filesystem.leer",
+             "parametros": {"ruta": "/mismo"}, "requiere_confirmacion": false,
+             "depende_de": [], "duracion_estimada_ms": 100, "puede_fallar": false},
+            {"id": "p3", "descripcion": "paso 3", "herramienta": "filesystem.leer",
+             "parametros": {"ruta": "/mismo"}, "requiere_confirmacion": false,
+             "depende_de": [], "duracion_estimada_ms": 100, "puede_fallar": false},
+            {"id": "p4", "descripcion": "paso 4", "herramienta": "filesystem.leer",
+             "parametros": {"ruta": "/mismo"}, "requiere_confirmacion": false,
+             "depende_de": [], "duracion_estimada_ms": 100, "puede_fallar": false}
+          ]
+        }
+        """
+        agente = _make_agente(
+            plan_respuesta=json_plan,
+            herramientas={"filesystem.leer": AsyncMock(return_value="ok")},
+        )
+        agente._reflector.reflect = AsyncMock(return_value=DecisionReflexion.CONTINUAR)
+        agente._reflector.evaluate_task_completion = MagicMock(return_value=False)
+
+        actualizaciones = []
+        async for u in agente.run("tarea con loop"):
+            actualizaciones.append(u)
+            if len(actualizaciones) > 30:
+                break
+
+        error_guard = [
+            u for u in actualizaciones
+            if u.tipo == "error" and "Loop detectado" in u.mensaje
+        ]
+        assert error_guard, f"Se esperaba error de runaway guard. Updates: {[u.tipo for u in actualizaciones]}"
