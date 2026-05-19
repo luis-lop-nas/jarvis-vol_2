@@ -24,6 +24,7 @@ from models._common import (
     RetryPolicy,
     TTLCache,
     estimar_tokens,
+    log_model_call,
     mensaje_a_dict,
 )
 from models.base import (
@@ -37,6 +38,12 @@ from models.base import (
 
 log = logging.getLogger(__name__)
 
+# Tarifas oficiales Moonshot/Kimi (USD por 1 M tokens).
+TARIFAS_USD: dict[str, dict[str, float]] = {
+    "kimi-k2.6":       {"input": 0.15, "output": 0.15},
+    "kimi-k2-thinking": {"input": 0.15, "output": 0.15},
+}
+
 
 class KimiModel(BaseModel):
     """Adaptador del proveedor Kimi (Moonshot)."""
@@ -48,6 +55,7 @@ class KimiModel(BaseModel):
         modelo: str | None = None,
         cliente: httpx.AsyncClient | None = None,
         cache: TTLCache | None = None,
+        audit_log: AuditLog | None = None,
     ) -> None:
         config = ModelConfig(
             name=modelo or settings.kimi_model_default,
@@ -69,6 +77,7 @@ class KimiModel(BaseModel):
         )
         self._retry = RetryPolicy(max_intentos=config.max_retries)
         self._cache = cache or TTLCache(max_entradas=128, ttl_segundos=300)
+        self._audit_log = audit_log
 
     # ------------------------------------------------------------------
     # complete / stream / thinking
@@ -123,25 +132,41 @@ class KimiModel(BaseModel):
 
         eleccion = datos["choices"][0]
         uso = datos.get("usage", {}) or {}
+        tokens_in = uso.get("prompt_tokens", 0)
+        tokens_out = uso.get("completion_tokens", 0)
+        coste = self._coste_usd(modelo_id, tokens_in, tokens_out)
+
         modelo_response = ModelResponse(
             content=eleccion["message"].get("content") or "",
             model=datos.get("model", modelo_id),
-            tokens_input=uso.get("prompt_tokens", 0),
-            tokens_output=uso.get("completion_tokens", 0),
+            tokens_input=tokens_in,
+            tokens_output=tokens_out,
             duration_ms=duracion,
             finish_reason=eleccion.get("finish_reason"),
             tool_calls=eleccion["message"].get("tool_calls") or [],
+            cost_usd=coste,
         )
         log.info(
-            "Kimi %s: %d→%d tokens, %d ms",
+            "Kimi %s: %d→%d tokens, %d ms, $%.6f",
             modelo_response.model,
-            modelo_response.tokens_input,
-            modelo_response.tokens_output,
-            modelo_response.duration_ms,
+            tokens_in,
+            tokens_out,
+            duracion,
+            coste,
         )
 
         if not herramientas:
             self._cache.put(clave, modelo_response)
+
+        await log_model_call(
+            self._audit_log,
+            modelo=modelo_response.model,
+            tokens_input=tokens_in,
+            tokens_output=tokens_out,
+            latencia_ms=duracion,
+            cost_usd=coste,
+            cache_hit=False,
+        )
         return modelo_response
 
     async def stream(
@@ -205,6 +230,12 @@ class KimiModel(BaseModel):
     # Misc
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _coste_usd(modelo_id: str, tokens_in: int, tokens_out: int) -> float:
+        """Calcula el coste estimado en USD según las tarifas de Moonshot."""
+        tarifas = TARIFAS_USD.get(modelo_id, {"input": 0.15, "output": 0.15})
+        return (tokens_in * tarifas["input"] + tokens_out * tarifas["output"]) / 1_000_000
+
     async def health_check(self) -> bool:
         """`True` si la API responde a una petición trivial."""
         try:
@@ -215,3 +246,10 @@ class KimiModel(BaseModel):
 
     async def cerrar(self) -> None:
         await self._cliente.aclose()
+
+
+# Importación diferida para evitar ciclos
+try:
+    from security.audit_log import AuditLog  # noqa: F401
+except ImportError:
+    AuditLog = None  # type: ignore[assignment,misc]

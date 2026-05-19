@@ -262,3 +262,68 @@ def test_seleccion_incluye_tiempo_de_decision() -> None:
     )
     assert isinstance(seleccion, ModelSelection)
     assert seleccion.decision_ms >= 0
+
+
+# ---------------------------------------------------------------------------
+# Circuit breaker en el router
+# ---------------------------------------------------------------------------
+
+
+class TestCircuitBreakerRouter:
+    def test_circuit_open_false_por_defecto(self) -> None:
+        router = ModelRouter()
+        sel = router.route(
+            "hola",
+            ContextoRuteo(mensajes=[Mensaje(rol="user", contenido="hola")], sin_internet=False),
+        )
+        assert sel.circuit_open is False
+
+    def test_escala_a_fallback_cuando_circuito_abierto(self) -> None:
+        router = ModelRouter()
+        # Abrir el circuito de Kimi con 3 fallos
+        for _ in range(3):
+            router.registrar_fallo_modelo(ModeloDestino.KIMI)
+
+        # Una tarea que normalmente iría a Kimi (visión)
+        sel = router.route(
+            "mira la pantalla y dime qué ves",
+            ContextoRuteo(
+                mensajes=[Mensaje(rol="user", contenido="mira la pantalla")],
+                sin_internet=False,
+            ),
+        )
+        # Debe haber escalado al primer fallback (DeepSeek) en lugar de Kimi
+        assert sel.model_name != ModeloDestino.KIMI
+        assert sel.circuit_open is True
+        assert "circuit_open" in sel.razon
+
+    def test_exito_cierra_circuito(self) -> None:
+        router = ModelRouter()
+        for _ in range(3):
+            router.registrar_fallo_modelo(ModeloDestino.DEEPSEEK)
+        assert router._circuito(ModeloDestino.DEEPSEEK).is_open() is True  # type: ignore[attr-defined]
+
+        router.registrar_exito_modelo(ModeloDestino.DEEPSEEK)
+        assert router._circuito(ModeloDestino.DEEPSEEK).is_open() is False  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# Acumulación de coste
+# ---------------------------------------------------------------------------
+
+
+class TestCostesRouter:
+    def test_total_cost_inicial_cero(self) -> None:
+        router = ModelRouter()
+        assert router.total_cost_usd == 0.0
+
+    def test_registrar_coste_acumula(self) -> None:
+        router = ModelRouter()
+        router.registrar_coste(0.000100)
+        router.registrar_coste(0.000050)
+        assert router.total_cost_usd == pytest.approx(0.000150)
+
+    def test_total_cost_expuesto_en_property(self) -> None:
+        router = ModelRouter()
+        router.registrar_coste(1.5)
+        assert router.total_cost_usd == pytest.approx(1.5)

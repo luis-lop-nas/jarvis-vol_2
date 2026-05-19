@@ -20,6 +20,7 @@ from models._common import (
     RetryPolicy,
     TTLCache,
     estimar_tokens,
+    log_model_call,
     mensaje_a_dict,
 )
 from models.base import (
@@ -53,6 +54,7 @@ class OpenRouterModel(BaseModel):
         modelo: str | None = None,
         cliente: httpx.AsyncClient | None = None,
         cache: TTLCache | None = None,
+        audit_log: AuditLog | None = None,
     ) -> None:
         config = ModelConfig(
             name=modelo or MODELOS_FREE_PREFERIDOS[0],
@@ -74,6 +76,7 @@ class OpenRouterModel(BaseModel):
         self._retry = RetryPolicy(max_intentos=config.max_retries)
         self._cache = cache or TTLCache(max_entradas=64, ttl_segundos=300)
         self._modelos_free_disponibles: list[str] | None = None
+        self._audit_log = audit_log
 
     # ------------------------------------------------------------------
     # complete / stream
@@ -114,15 +117,31 @@ class OpenRouterModel(BaseModel):
 
         eleccion = datos["choices"][0]
         uso = datos.get("usage", {}) or {}
-        return ModelResponse(
+        tokens_in = uso.get("prompt_tokens", 0)
+        tokens_out = uso.get("completion_tokens", 0)
+        # OpenRouter devuelve el coste real en usage.cost (ya en USD)
+        coste = float(uso.get("cost", 0.0))
+
+        respuesta_model = ModelResponse(
             content=eleccion["message"].get("content") or "",
             model=datos.get("model", modelo_id),
-            tokens_input=uso.get("prompt_tokens", 0),
-            tokens_output=uso.get("completion_tokens", 0),
+            tokens_input=tokens_in,
+            tokens_output=tokens_out,
             duration_ms=duracion,
             finish_reason=eleccion.get("finish_reason"),
             tool_calls=eleccion["message"].get("tool_calls") or [],
+            cost_usd=coste,
         )
+        await log_model_call(
+            self._audit_log,
+            modelo=respuesta_model.model,
+            tokens_input=tokens_in,
+            tokens_output=tokens_out,
+            latencia_ms=duracion,
+            cost_usd=coste,
+            cache_hit=False,
+        )
+        return respuesta_model
 
     async def stream(
         self,
@@ -188,6 +207,7 @@ class OpenRouterModel(BaseModel):
     # Selector de modelo free
     # ------------------------------------------------------------------
 
+
     async def _elegir_free(self) -> str:
         """Devuelve el primer modelo del catálogo `:free` que esté disponible."""
         if self._modelos_free_disponibles is None:
@@ -205,3 +225,10 @@ class OpenRouterModel(BaseModel):
         if not self._modelos_free_disponibles:
             return self.config.name
         return self._modelos_free_disponibles[0]
+
+
+# Importación diferida para evitar ciclos
+try:
+    from security.audit_log import AuditLog  # noqa: F401
+except ImportError:
+    AuditLog = None  # type: ignore[assignment,misc]

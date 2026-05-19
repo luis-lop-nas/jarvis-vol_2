@@ -14,7 +14,7 @@ import httpx
 import orjson
 import pytest
 
-from models._common import RetryPolicy, TTLCache, mensaje_a_dict
+from models._common import CircuitBreaker, EstadoCircuito, RetryPolicy, TTLCache, log_model_call, mensaje_a_dict
 from models.base import (
     BaseModel,
     Mensaje,
@@ -387,3 +387,183 @@ def test_model_response_y_stream_chunk_son_dataclasses() -> None:
     assert resp.cached is False
     chunk = StreamChunk(content="x", model="m")
     assert chunk.is_thinking is False
+
+
+# ---------------------------------------------------------------------------
+# CircuitBreaker
+# ---------------------------------------------------------------------------
+
+
+class TestCircuitBreaker:
+    def test_estado_inicial_closed(self) -> None:
+        cb = CircuitBreaker()
+        assert cb.estado() == EstadoCircuito.CLOSED
+        assert cb.is_open() is False
+
+    def test_abre_tras_max_fallos(self) -> None:
+        cb = CircuitBreaker(max_fallos=3, ventana_s=60.0)
+        cb.registrar_fallo()
+        cb.registrar_fallo()
+        assert cb.is_open() is False
+        cb.registrar_fallo()
+        assert cb.is_open() is True
+        assert cb.estado() == EstadoCircuito.OPEN
+
+    def test_exito_cierra_circuito(self) -> None:
+        cb = CircuitBreaker(max_fallos=2)
+        cb.registrar_fallo()
+        cb.registrar_fallo()
+        assert cb.is_open() is True
+        cb.registrar_exito()
+        assert cb.is_open() is False
+        assert cb.estado() == EstadoCircuito.CLOSED
+
+    def test_half_open_tras_recuperacion(self) -> None:
+        import time
+        cb = CircuitBreaker(max_fallos=2, tiempo_recuperacion_s=10.0)
+        cb.registrar_fallo()
+        cb.registrar_fallo()
+        assert cb.estado() == EstadoCircuito.OPEN
+
+        # Retroceder _apertura para simular que pasó el tiempo de recuperación
+        cb._apertura = time.monotonic() - 20.0  # type: ignore[attr-defined]
+        assert cb.estado() == EstadoCircuito.HALF_OPEN
+        assert cb.is_open() is False
+
+    def test_fallos_fuera_de_ventana_no_abren(self) -> None:
+        import time
+        cb = CircuitBreaker(max_fallos=3, ventana_s=1.0)
+        cb.registrar_fallo()
+        cb.registrar_fallo()
+        # Simula que el tiempo avanzó más allá de la ventana
+        cb._fallos = [t - 2.0 for t in cb._fallos]  # type: ignore[attr-defined]
+        cb.registrar_fallo()
+        # Solo 1 fallo en la ventana → no debe abrirse
+        assert cb.is_open() is False
+
+
+# ---------------------------------------------------------------------------
+# log_model_call
+# ---------------------------------------------------------------------------
+
+
+class TestLogModelCall:
+    async def test_sin_audit_log_no_falla(self) -> None:
+        await log_model_call(
+            None,
+            modelo="kimi-k2.6",
+            tokens_input=10,
+            tokens_output=5,
+            latencia_ms=200,
+            cost_usd=0.0000015,
+            cache_hit=False,
+        )
+
+    async def test_llama_log_action(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+        audit = MagicMock()
+        audit.log_action = AsyncMock()
+        await log_model_call(
+            audit,
+            modelo="deepseek-chat",
+            tokens_input=100,
+            tokens_output=50,
+            latencia_ms=300,
+            cost_usd=0.000120,
+            cache_hit=True,
+            session_id="sess-test",
+        )
+        audit.log_action.assert_awaited_once()
+        call_kwargs = audit.log_action.call_args.kwargs
+        assert call_kwargs["action_type"] == "model_call"
+        assert call_kwargs["details"]["modelo"] == "deepseek-chat"
+        assert call_kwargs["details"]["cache_hit"] is True
+        assert call_kwargs["session_id"] == "sess-test"
+
+
+# ---------------------------------------------------------------------------
+# Coste en clientes de modelo
+# ---------------------------------------------------------------------------
+
+
+class TestCostesModelos:
+    def _cliente(self, body: dict, base_url: str = "http://x") -> httpx.AsyncClient:
+        data = orjson.dumps(body)
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=data)
+
+        return httpx.AsyncClient(
+            transport=httpx.MockTransport(_handler), base_url=base_url
+        )
+
+    async def test_kimi_calcula_coste(self) -> None:
+        cuerpo = {
+            "id": "x",
+            "model": "kimi-k2.6",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 500},
+        }
+        model = KimiModel(cliente=self._cliente(cuerpo))
+        resp = await model.complete([Mensaje(rol="user", contenido="test")])
+        # 1000 * 0.15 / 1e6 + 500 * 0.15 / 1e6 = 0.000225
+        assert resp.cost_usd == pytest.approx(0.000225, rel=1e-3)
+
+    async def test_openrouter_usa_usage_cost(self) -> None:
+        cuerpo = {
+            "id": "x",
+            "model": "moonshotai/kimi-k2:free",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "cost": 0.000042},
+        }
+        model = OpenRouterModel(cliente=self._cliente(cuerpo))
+        resp = await model.complete([Mensaje(rol="user", contenido="test")])
+        assert resp.cost_usd == pytest.approx(0.000042)
+
+    async def test_ollama_coste_por_duracion(self) -> None:
+        cuerpo = {
+            "model": "gemma4:4b",
+            "message": {"role": "assistant", "content": "hola"},
+            "done": True,
+            "done_reason": "stop",
+            "eval_count": 10,
+            "eval_duration": 1_000_000_000,  # 1 segundo
+            "prompt_eval_count": 5,
+        }
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/api/tags":
+                return httpx.Response(200, content=orjson.dumps({"models": []}))
+            return httpx.Response(200, content=orjson.dumps(cuerpo))
+
+        from config import settings as cfg
+        cliente = httpx.AsyncClient(
+            transport=httpx.MockTransport(_handler), base_url="http://localhost:11434"
+        )
+        model = OllamaModel(cliente=cliente)
+        model._inicializado = True
+        model._modelo_cargado = "gemma4:4b"
+        resp = await model.complete([Mensaje(rol="user", contenido="test")])
+        # duracion_ms / 1000 * ollama_cost_per_second
+        esperado = (resp.duration_ms / 1000.0) * cfg.ollama_cost_per_second
+        assert resp.cost_usd == pytest.approx(esperado, rel=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# LiteLLMAdapter — solo verifica error cuando deshabilitado
+# ---------------------------------------------------------------------------
+
+
+class TestLiteLLMAdapter:
+    def test_error_cuando_deshabilitado(self) -> None:
+        from unittest.mock import patch
+        from models.litellm_adapter import LiteLLMAdapter, LiteLLMNotEnabledError
+        from config import settings as cfg
+
+        original = cfg.litellm_enabled
+        try:
+            object.__setattr__(cfg, "litellm_enabled", False)
+            with pytest.raises(LiteLLMNotEnabledError):
+                LiteLLMAdapter("openai/gpt-4o-mini")
+        finally:
+            object.__setattr__(cfg, "litellm_enabled", original)

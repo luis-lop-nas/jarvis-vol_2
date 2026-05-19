@@ -23,7 +23,7 @@ import orjson
 import psutil
 
 from config import settings
-from models._common import mensaje_a_dict
+from models._common import log_model_call, mensaje_a_dict
 from models.base import (
     BaseModel,
     Mensaje,
@@ -57,6 +57,7 @@ class OllamaModel(BaseModel):
         self,
         modelo: str | None = None,
         cliente: httpx.AsyncClient | None = None,
+        audit_log: AuditLog | None = None,
     ) -> None:
         config = ModelConfig(
             name=modelo or settings.ollama_model_default,
@@ -76,6 +77,7 @@ class OllamaModel(BaseModel):
         self._modelos_disponibles: set[str] = set()
         self._modelo_cargado: str | None = None
         self._inicializado = False
+        self._audit_log = audit_log
 
     # ------------------------------------------------------------------
     # Inicialización (perezosa)
@@ -133,17 +135,31 @@ class OllamaModel(BaseModel):
         eval_count = int(datos.get("eval_count", 0))
         eval_dur_ns = int(datos.get("eval_duration", 0)) or 1
         tps = eval_count / (eval_dur_ns / 1_000_000_000)
+        # Coste aproximado: tiempo de inferencia × tarifa configurada
+        coste = (duracion / 1000.0) * settings.ollama_cost_per_second
 
-        return ModelResponse(
+        tokens_in = int(datos.get("prompt_eval_count", 0))
+        respuesta = ModelResponse(
             content=mensaje.get("content", ""),
             model=datos.get("model", modelo_id),
-            tokens_input=int(datos.get("prompt_eval_count", 0)),
+            tokens_input=tokens_in,
             tokens_output=eval_count,
             duration_ms=duracion,
             finish_reason=datos.get("done_reason"),
             tool_calls=mensaje.get("tool_calls") or [],
+            cost_usd=coste,
             metadatos={"tokens_per_second": tps},
         )
+        await log_model_call(
+            self._audit_log,
+            modelo=respuesta.model,
+            tokens_input=tokens_in,
+            tokens_output=eval_count,
+            latencia_ms=duracion,
+            cost_usd=coste,
+            cache_hit=False,
+        )
+        return respuesta
 
     async def stream(
         self,
@@ -291,6 +307,13 @@ class OllamaModel(BaseModel):
 # ---------------------------------------------------------------------------
 # Helpers de instalación (usado por scripts/Makefile)
 # ---------------------------------------------------------------------------
+
+
+# Importación diferida para evitar ciclos
+try:
+    from security.audit_log import AuditLog  # noqa: F401
+except ImportError:
+    AuditLog = None  # type: ignore[assignment,misc]
 
 
 def ollama_instalado() -> bool:

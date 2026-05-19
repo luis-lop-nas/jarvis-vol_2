@@ -281,6 +281,23 @@ Basadas en patrones de clawdcursor, Self-Operating Computer y el paper Screen2AX
 - **Tests añadidos** (19): `test_applescript_app_not_running`, `test_applescript_retry_on_transient`, `test_applescript_error_strict_raises`, `test_applescript_error_fields`, `test_whatsapp_session_init_no_session`, `test_whatsapp_session_reutiliza_sesion_existente`, `test_telegram_missing_token_raises`, `test_telegram_whitespace_token_raises`, `test_telegram_valid_token_does_not_raise`, `test_filesystem_delete_verification`, `test_filesystem_move_verification_origen_persiste`, `test_filesystem_delete_ok_no_verification_error`, `test_filesystem_move_ok_no_verification_error`, `test_filesystem_dry_run_delete`, `test_filesystem_dry_run_move`, `test_terminal_dry_run_dangerous`, `test_terminal_dry_run_safe_command`, `test_mail_dry_run_enviar`, `test_imessage_dry_run_enviar`.
 - **Suite completa: 323/323 verde (+ 1 skip fastmcp) en ~23s** (antes 304).
 
+### Mejoras de observabilidad models/ — LiteLLM + RouteLLM patterns (2026-05-19)
+
+- **`config/settings.py`** — `ollama_cost_per_second: float = 0.0001` y `litellm_enabled: bool = False`.
+- **`models/_common.py`** — `EstadoCircuito(StrEnum)` (CLOSED/OPEN/HALF_OPEN) + `CircuitBreaker`: 3 fallos en 60s → OPEN 5min → HALF_OPEN (una petición de prueba). `registrar_fallo()`, `registrar_exito()`, `is_open()`, `estado()`. `log_model_call()` async: registra métricas en audit_log con `action_type="model_call"` sin contenido (privacidad por diseño) — `modelo`, `tokens_input`, `tokens_output`, `cost_usd`, `cache_hit`, `session_id`.
+- **`models/kimi.py`** — `TARIFAS_USD = {"kimi-k2.6": {"input": 0.15, "output": 0.15}, ...}`. `_coste_usd()` estático. `audit_log` param en `__init__`. Calcula `cost_usd` y llama `log_model_call()` en `complete()`. Import diferido `security.audit_log`.
+- **`models/openrouter.py`** — `audit_log` param. Parsea `float(uso.get("cost", 0.0))` desde la respuesta de OpenRouter (ya en USD). Llama `log_model_call()`. Import diferido.
+- **`models/ollama_client.py`** — `audit_log` param. `cost_usd = (duration_ms / 1000) * settings.ollama_cost_per_second`. Llama `log_model_call()`. Import diferido.
+- **`models/deepseek.py`** — `audit_log` param (ya tenía cálculo de coste). Llama `log_model_call()` con `cache_hit=bool(tokens_cached)`. Import diferido.
+- **`core/router.py`** — `circuit_open: bool = False` en `ModelSelection`. `ModelRouter` añade `_circuitos: dict[ModeloDestino, CircuitBreaker]` y `_total_cost_usd: float`. Si el destino elegido tiene el circuito OPEN: escala automáticamente al primer fallback y marca `circuit_open=True` y prefija la razón con `"circuit_open→"`. Métodos: `registrar_coste(cost_usd)`, `total_cost_usd` (property), `registrar_fallo_modelo(destino)`, `registrar_exito_modelo(destino)`, `_circuito(destino)` (lazy init).
+- **`interface/api_models.py`** — `total_cost_usd: float = 0.0` en `SystemStatus`.
+- **`interface/api.py`** — `router: ModelRouter | None = None` en `crear_servidor()`. `GET /status` expone `router.total_cost_usd`.
+- **`models/litellm_adapter.py`** (nuevo) — `LiteLLMAdapter(BaseModel)` sobre `litellm.acompletion()`. Solo activo con `LITELLM_ENABLED=true`. `LiteLLMNotEnabledError` con mensaje de ayuda. Parsea `response._hidden_params.response_cost`. Soporta `complete()` y `stream()`.
+- **`requirements.txt`** — Comentario con instrucción opcional: `litellm>=1.40.0`.
+- **ADRs**: ADR-97 (CircuitBreaker por proveedor en ModelRouter — lazy init, 3/60s→OPEN, 5min→HALF_OPEN), ADR-98 (log_model_call sin contenido — privacidad primero; solo métricas en audit_log), ADR-99 (total_cost_usd acumulado en ModelRouter, no en settings — el router ya es singleton por sesión; exposición en /status), ADR-100 (LiteLLMAdapter guard con litellm_enabled=False — no añade importación de litellm en el bundle principal; solo carga si habilitado).
+- **Tests añadidos** (17): `TestCircuitBreaker` (5: estado_inicial, abre_tras_max_fallos, exito_cierra, half_open_tras_recuperacion, fallos_fuera_de_ventana), `TestLogModelCall` (2: sin_audit_no_falla, llama_log_action), `TestCostesModelos` (3: kimi_calcula_coste, openrouter_usa_usage_cost, ollama_coste_por_duracion), `TestLiteLLMAdapter` (1: error_cuando_deshabilitado), `TestCircuitBreakerRouter` (3: circuit_open_false_defecto, escala_a_fallback, exito_cierra_circuito), `TestCostesRouter` (3: total_cost_inicial, registrar_coste_acumula, property).
+- **Suite completa: 340/340 verde (+ 1 skip fastmcp) en ~22s** (antes 323).
+
 ## 🔄 En progreso
 
 _(nada activo)_
@@ -411,6 +428,12 @@ _(nada activo)_
 - **Accesibilidad** — Sistema → Privacidad → Accesibilidad → añadir el proceso. Sin este permiso todas las funciones de `accessibility.py` devuelven None.
 - **Grabación de pantalla** — Sistema → Privacidad → Grabación de pantalla → añadir el proceso. Sin este permiso `screencapture` devuelve imagen negra.
 - `main.py` debe llamar a `solicitar_permiso_accesibilidad()` en startup si `verificar_permiso_accesibilidad()` devuelve False.
+
+### 2026-05-19 (Mejoras models/ — observabilidad)
+- ADR-97: **CircuitBreaker por proveedor en ModelRouter** — lazy init con `_circuito(destino)`. Si OPEN al momento de `route()`, escala al primer fallback de la cadena y marca `circuit_open=True`. El caller (core/agent.py) debe llamar `registrar_fallo_modelo` y `registrar_exito_modelo` según el resultado de la llamada real.
+- ADR-98: **log_model_call sin contenido** — privacidad primero: solo se registran métricas (tokens, latencia, coste, cache_hit) en el audit_log con `action_type="model_call"`. El contenido de los mensajes nunca llega al log.
+- ADR-99: **total_cost_usd en ModelRouter** — el router es singleton por sesión y es el punto natural de acumulación de costes. Se expone en `/status` para el dashboard. No se persiste (se acumula desde el arranque del proceso, como un contador de sesión).
+- ADR-100: **LiteLLMAdapter solo carga litellm si LITELLM_ENABLED=true** — `import litellm` está dentro del `__init__` y de cada método, nunca en el módulo. Evita añadir litellm (~10 MB) al bundle principal. El `LiteLLMNotEnabledError` da instrucciones claras de activación.
 
 ### Deudas previas
 - WhatsApp MCP: ~~requiere sesión inyectada~~ → resuelto 2026-05-19 (`initialize_session()`). El servidor MCP en `server_comms.py` puede llamar a `initialize_session()` en lugar de esperar inyección; pendiente actualizar el adaptador.

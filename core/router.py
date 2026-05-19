@@ -25,6 +25,7 @@ from enum import StrEnum
 from typing import Any
 
 from config import settings
+from models._common import CircuitBreaker
 from models.base import BaseModel, Mensaje
 from models.deepseek import DeepSeekModel
 from models.kimi import KimiModel
@@ -113,6 +114,7 @@ class ModelSelection:
     fallback_chain: list[ModeloDestino] = field(default_factory=list)
     complejidad: float = 0.0
     decision_ms: float = 0.0
+    circuit_open: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +133,8 @@ class ModelRouter:
         self._clientes: dict[ModeloDestino, BaseModel] = clientes or {}
         self._cache_internet: tuple[float, bool] | None = None
         self._chequeo_internet_ttl = chequeo_internet_ttl_s
+        self._circuitos: dict[ModeloDestino, CircuitBreaker] = {}
+        self._total_cost_usd: float = 0.0
 
     # ------------------------------------------------------------------
     # Entrada principal
@@ -147,12 +151,23 @@ class ModelRouter:
         fallback = self._fallback_para(destino) if settings.router_fallback_enabled else []
         decision_ms = (time.perf_counter() - inicio) * 1000
 
+        # Si el circuito del destino está abierto, marcar y escalar al primer fallback
+        circuito_abierto = self._circuito(destino).is_open()
+        if circuito_abierto and fallback:
+            log.warning(
+                "CircuitBreaker OPEN para %s; escalando a %s", destino.value, fallback[0].value
+            )
+            destino = fallback[0]
+            fallback = fallback[1:]
+            razon = f"circuit_open→{razon}"
+
         seleccion = ModelSelection(
             model_name=destino,
             razon=razon,
             fallback_chain=fallback,
             complejidad=complejidad,
             decision_ms=decision_ms,
+            circuit_open=circuito_abierto,
         )
 
         if settings.router_log_decisions:
@@ -166,6 +181,28 @@ class ModelRouter:
                 resumen,
             )
         return seleccion
+
+    def registrar_coste(self, cost_usd: float) -> None:
+        """Acumula el coste de una llamada al total de la sesión."""
+        self._total_cost_usd += cost_usd
+
+    @property
+    def total_cost_usd(self) -> float:
+        """Coste acumulado desde la creación del router."""
+        return self._total_cost_usd
+
+    def registrar_fallo_modelo(self, destino: ModeloDestino) -> None:
+        """Notifica un fallo al circuit breaker del destino."""
+        self._circuito(destino).registrar_fallo()
+
+    def registrar_exito_modelo(self, destino: ModeloDestino) -> None:
+        """Notifica un éxito al circuit breaker del destino."""
+        self._circuito(destino).registrar_exito()
+
+    def _circuito(self, destino: ModeloDestino) -> CircuitBreaker:
+        if destino not in self._circuitos:
+            self._circuitos[destino] = CircuitBreaker()
+        return self._circuitos[destino]
 
     # ------------------------------------------------------------------
     # Reglas

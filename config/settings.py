@@ -94,6 +94,10 @@ class Settings(BaseSettings):
     agent_step_timeout_seconds: int = Field(default=120, ge=1)
     agent_dry_run_mode: bool = Field(default=False)
 
+    # --- Coste de inferencia ---
+    ollama_cost_per_second: float = Field(default=0.0001, ge=0.0)
+    litellm_enabled: bool = Field(default=False)
+
     # --- Sesiones ---
     session_ttl_hours: int = Field(default=24, ge=1)
 

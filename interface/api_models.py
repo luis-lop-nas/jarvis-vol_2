@@ -58,3 +58,4 @@ class SystemStatus(BaseModel):
     ram_available_gb: float
     onepassword_available: bool
     mcp_health: dict[str, bool] = Field(default_factory=dict)
+    total_cost_usd: float = 0.0

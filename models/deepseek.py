@@ -25,6 +25,7 @@ from models._common import (
     RetryPolicy,
     TTLCache,
     estimar_tokens,
+    log_model_call,
     mensaje_a_dict,
 )
 from models.base import (
@@ -58,6 +59,7 @@ class DeepSeekModel(BaseModel):
         modelo: str | None = None,
         cliente: httpx.AsyncClient | None = None,
         cache: TTLCache | None = None,
+        audit_log: AuditLog | None = None,
     ) -> None:
         config = ModelConfig(
             name=modelo or settings.deepseek_model_default,
@@ -78,6 +80,7 @@ class DeepSeekModel(BaseModel):
         )
         self._retry = RetryPolicy(max_intentos=config.max_retries)
         self._cache = cache or TTLCache(max_entradas=128, ttl_segundos=300)
+        self._audit_log = audit_log
 
     # ------------------------------------------------------------------
     # complete / stream
@@ -161,6 +164,16 @@ class DeepSeekModel(BaseModel):
 
         if not herramientas:
             self._cache.put(clave, modelo_response)
+
+        await log_model_call(
+            self._audit_log,
+            modelo=modelo_response.model,
+            tokens_input=tokens_in,
+            tokens_output=tokens_out,
+            latencia_ms=duracion,
+            cost_usd=coste,
+            cache_hit=bool(tokens_cached),
+        )
         return modelo_response
 
     async def stream(
@@ -250,3 +263,10 @@ class DeepSeekModel(BaseModel):
             + tokens_cached * tarifa["input_cached"]
             + tokens_out * tarifa["output"]
         ) / 1_000_000
+
+
+# Importación diferida para evitar ciclos
+try:
+    from security.audit_log import AuditLog  # noqa: F401
+except ImportError:
+    AuditLog = None  # type: ignore[assignment,misc]

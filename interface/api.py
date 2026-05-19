@@ -27,6 +27,7 @@ from sse_starlette.sse import EventSourceResponse
 
 if TYPE_CHECKING:
     from core.mcp_bus import MCPBus
+    from core.router import ModelRouter
     from security.audit_log import AuditLog
     from security.confirmation import ConfirmationManager
 
@@ -153,6 +154,7 @@ def crear_servidor(
     audit_log: AuditLog | None = None,
     bus: MCPBus | None = None,
     session_store: SessionStore | None = None,
+    router: ModelRouter | None = None,
 ) -> FastAPI:
     """Construye la aplicación FastAPI completa con todas las rutas."""
 
@@ -363,6 +365,7 @@ def crear_servidor(
             ram_available_gb=ram_gb,
             onepassword_available=op_ok,
             mcp_health=mcp_health,
+            total_cost_usd=router.total_cost_usd if router is not None else 0.0,
         )
 
     # ------------------------------------------------------------------

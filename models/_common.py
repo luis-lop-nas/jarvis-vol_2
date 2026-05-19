@@ -2,6 +2,8 @@
 
 - `RetryPolicy`: backoff exponencial sobre 429/5xx.
 - `TTLCache`: caché LRU + TTL por hash de mensajes.
+- `CircuitBreaker`: cortocircuito por proveedor (3 fallos / 60 s → OPEN 5 min).
+- `log_model_call`: registra métricas de llamada en el audit_log.
 - `estimar_tokens`: aproximación grosera (no para facturación, solo logs).
 - `aplicar_imagenes`: empaqueta imágenes base64 al formato OpenAI-compat.
 """
@@ -16,6 +18,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, TypeVar
 
 import httpx
@@ -153,6 +156,131 @@ class TTLCache:
 def estimar_tokens(texto: str) -> int:
     """Estimación grosera: ~4 caracteres por token. Solo para logs/heurísticas."""
     return max(1, len(texto) // 4)
+
+
+# ---------------------------------------------------------------------------
+# Circuit breaker por proveedor
+# ---------------------------------------------------------------------------
+
+
+class EstadoCircuito(StrEnum):
+    """Estados posibles del circuit breaker."""
+
+    CLOSED = "closed"
+    OPEN = "open"
+    HALF_OPEN = "half_open"
+
+
+class CircuitBreaker:
+    """Cortocircuito por proveedor: 3 fallos en 60 s → OPEN 5 min → HALF_OPEN.
+
+    Ejemplo::
+        cb = CircuitBreaker()
+        if cb.is_open():
+            raise RuntimeError("Proveedor no disponible")
+        try:
+            result = await call_provider()
+            cb.registrar_exito()
+        except Exception:
+            cb.registrar_fallo()
+            raise
+    """
+
+    def __init__(
+        self,
+        max_fallos: int = 3,
+        ventana_s: float = 60.0,
+        tiempo_recuperacion_s: float = 300.0,
+    ) -> None:
+        self._max_fallos = max_fallos
+        self._ventana = ventana_s
+        self._tiempo_recuperacion = tiempo_recuperacion_s
+        self._fallos: list[float] = []
+        self._apertura: float | None = None
+
+    def is_open(self) -> bool:
+        """True si el circuito está OPEN (rechaza peticiones)."""
+        if self._apertura is None:
+            return False
+        if time.monotonic() - self._apertura >= self._tiempo_recuperacion:
+            return False
+        return True
+
+    def estado(self) -> EstadoCircuito:
+        """Estado actual del circuito."""
+        if self._apertura is None:
+            return EstadoCircuito.CLOSED
+        if time.monotonic() - self._apertura >= self._tiempo_recuperacion:
+            return EstadoCircuito.HALF_OPEN
+        return EstadoCircuito.OPEN
+
+    def registrar_fallo(self) -> None:
+        """Registra un fallo; abre el circuito si se superan los umbrales."""
+        ahora = time.monotonic()
+        self._fallos = [t for t in self._fallos if ahora - t < self._ventana]
+        self._fallos.append(ahora)
+        if len(self._fallos) >= self._max_fallos:
+            self._apertura = ahora
+            log.warning(
+                "CircuitBreaker ABIERTO: %d fallos en %.0f s",
+                len(self._fallos),
+                self._ventana,
+            )
+
+    def registrar_exito(self) -> None:
+        """Registra éxito; cierra el circuito si estaba abierto."""
+        if self._apertura is not None:
+            log.info("CircuitBreaker CERRADO tras recuperación")
+        self._fallos.clear()
+        self._apertura = None
+
+
+# ---------------------------------------------------------------------------
+# Log estructurado de llamadas a modelo
+# ---------------------------------------------------------------------------
+
+
+async def log_model_call(
+    audit_log: Any | None,
+    *,
+    modelo: str,
+    tokens_input: int,
+    tokens_output: int,
+    latencia_ms: int,
+    cost_usd: float,
+    cache_hit: bool,
+    session_id: str = "",
+) -> None:
+    """Registra métricas de una llamada a modelo en el audit_log.
+
+    No registra contenido — solo métricas (privacidad por diseño).
+
+    Ejemplo::
+        await log_model_call(
+            audit_log, modelo="kimi-k2.6",
+            tokens_input=120, tokens_output=80,
+            latencia_ms=340, cost_usd=0.000030, cache_hit=False,
+        )
+    """
+    if audit_log is None:
+        return
+    await audit_log.log_action(
+        session_id=session_id,
+        action_type="model_call",
+        action="complete",
+        details={
+            "modelo": modelo,
+            "tokens_input": tokens_input,
+            "tokens_output": tokens_output,
+            "cost_usd": round(cost_usd, 8),
+            "cache_hit": cache_hit,
+        },
+        result="success",
+        risk_level="safe",
+        confirmed=True,
+        authenticated=False,
+        duration_ms=latencia_ms,
+    )
 
 
 def mensaje_a_dict(mensaje: Mensaje) -> dict[str, Any]:
