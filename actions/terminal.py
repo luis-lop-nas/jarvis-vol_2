@@ -7,6 +7,7 @@ Nunca usar subprocess directamente desde otros módulos de JARVIS.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import shlex
 import sys
@@ -15,6 +16,10 @@ from asyncio import subprocess as aio_sub
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+from actions.filesystem import DryRunResult
+
+_log = logging.getLogger(__name__)
 
 _HOME = Path.home()
 _MAX_TIMEOUT = 120.0
@@ -127,14 +132,36 @@ class Terminal:
         timeout: float = 60.0,
         directorio: Path | None = None,
         env_extra: dict[str, str] | None = None,
-    ) -> ResultadoComando:
+        dry_run: bool = False,
+    ) -> ResultadoComando | DryRunResult:
         """Ejecuta un comando de shell y devuelve el resultado.
 
         Si se inyectó un Sandbox de seguridad, delega en él (verifica riesgo + auth).
+        Con dry_run=True devuelve DryRunResult sin ejecutar el comando.
 
         Ejemplo::
             res = await terminal.ejecutar_comando("git status", timeout=10)
         """
+        argv = self._parsear(comando)
+        binario = Path(argv[0]).name
+
+        if dry_run:
+            necesita_confirmacion = self._sandbox and (
+                binario in _REQUIEREN_CONFIRMACION
+                or binario in _BLOQUEADOS
+                or (binario == "git" and len(argv) > 1 and argv[1] in _GIT_CONFIRMACION)
+            )
+            return DryRunResult(
+                accion="terminal.ejecutar_comando",
+                descripcion=f"Ejecutar: {comando}",
+                efecto_esperado=(
+                    "Comando bloqueado — no se ejecutaría"
+                    if binario in _BLOQUEADOS
+                    else f"Se ejecutaría '{binario}' con sus efectos asociados"
+                    + (" (requiere confirmación)" if necesita_confirmacion else "")
+                ),
+            )
+
         if self._security_sandbox is not None:
             cmd_result = await self._security_sandbox.execute_safe(
                 comando,
@@ -142,7 +169,7 @@ class Terminal:
                 timeout=timeout,
                 env=env_extra,
             )
-            return ResultadoComando(
+            resultado = ResultadoComando(
                 stdout=cmd_result.stdout,
                 stderr=cmd_result.stderr,
                 codigo_retorno=cmd_result.codigo_retorno,
@@ -150,10 +177,14 @@ class Terminal:
                 comando=cmd_result.comando,
                 directorio=cmd_result.directorio,
             )
+        else:
+            await self._verificar_permiso(argv, comando)
+            resultado = await self._ejecutar(argv, timeout=timeout, directorio=directorio, env_extra=env_extra)
 
-        argv = self._parsear(comando)
-        await self._verificar_permiso(argv, comando)
-        return await self._ejecutar(argv, timeout=timeout, directorio=directorio, env_extra=env_extra)
+        if not resultado.exito and resultado.stderr:
+            _log.warning("Comando '%s' terminó con código %d: %s", argv[0], resultado.codigo_retorno, resultado.stderr[:300])
+
+        return resultado
 
     async def ejecutar_script(
         self,

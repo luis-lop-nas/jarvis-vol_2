@@ -6,6 +6,7 @@ periféricos del equipo. Deben pasar en CI sin macOS.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -557,6 +558,362 @@ class TestIMessage:
         resultado = await im.enviar_mensaje("+34612345678", "Hola")
         assert resultado is True
         cs_mock.ejecutar_applescript.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# MEJORAS — AppleScriptError + retry
+# ---------------------------------------------------------------------------
+
+
+class TestAppleScriptError:
+    """Tests de manejo de errores AppleScript con retry y clasificación."""
+
+    @pytest.mark.asyncio
+    async def test_applescript_app_not_running(self) -> None:
+        """Error -600 (app no en ejecución) devuelve None y no lanza excepción."""
+        from actions.system import ControlSistema
+        cs = ControlSistema()
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 1
+        stderr_bytes = b"0:1: execution error: Safari got an error: Application isn't running. (-600)\n"
+        mock_proc.communicate = AsyncMock(return_value=(b"", stderr_bytes))
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            result = await cs._applescript('tell application "Safari" to get URL of current tab')
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_applescript_retry_on_transient(self) -> None:
+        """Error -1708 (transitorio) dispara un reintento automático y tiene éxito."""
+        from actions.system import ControlSistema
+        cs = ControlSistema()
+
+        stderr_1708 = b"0:1: execution error: System Events got an error: event not handled. (-1708)\n"
+
+        mock_proc_fail = MagicMock()
+        mock_proc_fail.returncode = 1
+        mock_proc_fail.communicate = AsyncMock(return_value=(b"", stderr_1708))
+
+        mock_proc_ok = MagicMock()
+        mock_proc_ok.returncode = 0
+        mock_proc_ok.communicate = AsyncMock(return_value=(b"resultado", b""))
+
+        call_count = 0
+
+        async def mock_exec(*_args, **_kwargs):
+            nonlocal call_count
+            call_count += 1
+            return mock_proc_fail if call_count == 1 else mock_proc_ok
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
+            with patch("asyncio.sleep", new=AsyncMock()):
+                result = await cs._applescript('tell application "System Events" to get name of process 1')
+
+        assert call_count == 2
+        assert result == "resultado"
+
+    @pytest.mark.asyncio
+    async def test_applescript_error_strict_raises(self) -> None:
+        """ejecutar_applescript_estricto lanza AppleScriptError en caso de fallo."""
+        from actions.system import AppleScriptError, ControlSistema
+        cs = ControlSistema()
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 1
+        stderr_bytes = b'0:1: execution error: Finder got an error: (-1712)\n'
+        mock_proc.communicate = AsyncMock(return_value=(b"", stderr_bytes))
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            with patch("asyncio.sleep", new=AsyncMock()):
+                with pytest.raises(AppleScriptError) as exc_info:
+                    await cs.ejecutar_applescript_estricto('tell application "Finder" to get name of window 1')
+
+        assert exc_info.value.error_code == -1712
+
+    @pytest.mark.asyncio
+    async def test_applescript_error_fields(self) -> None:
+        """AppleScriptError incluye error_code, app_name y suggestion."""
+        from actions.system import AppleScriptError
+        err = AppleScriptError(error_code=-600, app_name="Safari", suggestion="Abre Safari")
+        assert err.error_code == -600
+        assert err.app_name == "Safari"
+        assert "Safari" in str(err)
+
+
+# ---------------------------------------------------------------------------
+# MEJORAS — WhatsApp initialize_session
+# ---------------------------------------------------------------------------
+
+
+class TestWhatsAppSession:
+    """Tests de inicialización autónoma de WhatsApp con Playwright."""
+
+    def _build_playwright_mock(self, mock_page: AsyncMock, *, sesion_activa: bool = True):
+        """Helper: construye los mocks de Playwright para tests de WhatsApp."""
+        mock_context = MagicMock()
+        mock_context.pages = [mock_page]
+
+        mock_pw = AsyncMock()
+        mock_pw.chromium.launch_persistent_context = AsyncMock(return_value=mock_context)
+
+        # async_playwright() devuelve un context manager async
+        mock_pw_instance = AsyncMock()
+        mock_pw_instance.__aenter__ = AsyncMock(return_value=mock_pw)
+        mock_pw_instance.__aexit__ = AsyncMock(return_value=None)
+        # El patrón real es: playwright = await async_playwright().start()
+        # .start() es el método real; simplificamos mockeando start()
+        mock_pw_callable = MagicMock(return_value=mock_pw_instance)
+
+        if sesion_activa:
+            mock_page.wait_for_selector = AsyncMock(return_value=MagicMock())
+        else:
+            call_count_box = [0]
+
+            async def wait_side(selector, timeout=None):
+                call_count_box[0] += 1
+                if call_count_box[0] == 1:
+                    raise Exception("Sin sesión — QR visible")
+                return MagicMock()
+
+            mock_page.wait_for_selector = wait_side
+
+        mock_page.goto = AsyncMock()
+        return mock_pw_callable, mock_pw, mock_context
+
+    @pytest.mark.asyncio
+    async def test_whatsapp_session_init_no_session(self, tmp_path: Path) -> None:
+        """initialize_session() navega a WhatsApp Web y espera el QR sin sesión previa."""
+        from actions.comms.whatsapp import WhatsApp
+
+        mock_page = AsyncMock()
+        mock_pw_callable, mock_pw, mock_context = self._build_playwright_mock(
+            mock_page, sesion_activa=False
+        )
+
+        # mock_pw.start() es el método que se llama realmente
+        mock_pw_instance = mock_pw_callable.return_value
+        mock_pw_instance.start = AsyncMock(return_value=mock_pw)
+
+        with patch("playwright.async_api.async_playwright", mock_pw_callable):
+            wa = await WhatsApp.initialize_session(
+                session_dir=tmp_path / "wa_session",
+                timeout_qr_s=1,
+            )
+
+        mock_page.goto.assert_called_once_with("https://web.whatsapp.com")
+        assert wa._inicializado is True
+
+    @pytest.mark.asyncio
+    async def test_whatsapp_session_reutiliza_sesion_existente(self, tmp_path: Path) -> None:
+        """initialize_session() reutiliza sesión guardada sin mostrar QR."""
+        from actions.comms.whatsapp import WhatsApp
+
+        mock_page = AsyncMock()
+        mock_pw_callable, mock_pw, mock_context = self._build_playwright_mock(
+            mock_page, sesion_activa=True
+        )
+        mock_pw_instance = mock_pw_callable.return_value
+        mock_pw_instance.start = AsyncMock(return_value=mock_pw)
+
+        with patch("playwright.async_api.async_playwright", mock_pw_callable):
+            wa = await WhatsApp.initialize_session(session_dir=tmp_path / "wa_session")
+
+        assert wa._inicializado is True
+        assert mock_page.wait_for_selector.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# MEJORAS — Telegram TelegramNotConfiguredError
+# ---------------------------------------------------------------------------
+
+
+class TestTelegramConfig:
+    """Tests de validación de token Telegram en instanciación."""
+
+    def test_telegram_missing_token_raises(self) -> None:
+        """Telegram lanza TelegramNotConfiguredError si el token está vacío."""
+        from actions.comms.telegram import Telegram, TelegramNotConfiguredError
+        with pytest.raises(TelegramNotConfiguredError) as exc_info:
+            Telegram(token="")
+        assert "TELEGRAM_BOT_TOKEN" in str(exc_info.value)
+        assert "BotFather" in str(exc_info.value)
+
+    def test_telegram_whitespace_token_raises(self) -> None:
+        """Telegram lanza TelegramNotConfiguredError si el token es solo espacios."""
+        from actions.comms.telegram import Telegram, TelegramNotConfiguredError
+        with pytest.raises(TelegramNotConfiguredError):
+            Telegram(token="   ")
+
+    def test_telegram_valid_token_does_not_raise(self) -> None:
+        """Telegram con token válido se instancia correctamente."""
+        from actions.comms.telegram import Telegram
+        with patch("telegram.Bot.__init__", return_value=None):
+            tg = Telegram(token="123456:ABCDEF")
+        assert tg is not None
+
+
+# ---------------------------------------------------------------------------
+# MEJORAS — Verificación post-acción en filesystem
+# ---------------------------------------------------------------------------
+
+
+class TestFilesystemVerification:
+    """Tests de verificación post-acción en operaciones destructivas."""
+
+    @pytest.mark.asyncio
+    async def test_filesystem_delete_verification(self, tmp_path: Path) -> None:
+        """ActionVerificationError si el archivo persiste después de unlink."""
+        from actions.filesystem import ActionVerificationError, SistemaArchivos
+        fs = SistemaArchivos(raiz_permitida=tmp_path, callback_confirmacion=_aprobar)
+        archivo = tmp_path / "test.txt"
+        archivo.write_text("x")
+
+        # to_thread no ejecuta unlink, el archivo sigue ahí → falla la verificación
+        with patch("asyncio.to_thread", new=AsyncMock(return_value=None)):
+            with pytest.raises(ActionVerificationError) as exc_info:
+                await fs.eliminar_archivo(archivo)
+
+        assert exc_info.value.accion == "eliminar_archivo"
+        assert archivo.exists()
+
+    @pytest.mark.asyncio
+    async def test_filesystem_move_verification_origen_persiste(self, tmp_path: Path) -> None:
+        """ActionVerificationError si el origen sigue existiendo tras mover."""
+        from actions.filesystem import ActionVerificationError, SistemaArchivos
+        fs = SistemaArchivos(raiz_permitida=tmp_path, callback_confirmacion=_aprobar)
+        origen = tmp_path / "a.txt"
+        destino = tmp_path / "b.txt"
+        origen.write_text("dato")
+
+        # to_thread no ejecuta shutil.move, origen sigue ahí
+        with patch("asyncio.to_thread", new=AsyncMock(return_value=None)):
+            with pytest.raises(ActionVerificationError) as exc_info:
+                await fs.mover_archivo(origen, destino)
+
+        assert exc_info.value.accion == "mover_archivo"
+        assert "origen" in exc_info.value.esperado
+
+    @pytest.mark.asyncio
+    async def test_filesystem_delete_ok_no_verification_error(self, tmp_path: Path) -> None:
+        """Eliminación real no lanza ActionVerificationError."""
+        from actions.filesystem import SistemaArchivos
+        fs = SistemaArchivos(raiz_permitida=tmp_path, callback_confirmacion=_aprobar)
+        archivo = tmp_path / "test.txt"
+        archivo.write_text("x")
+
+        resultado = await fs.eliminar_archivo(archivo)
+        assert resultado is True
+        assert not archivo.exists()
+
+    @pytest.mark.asyncio
+    async def test_filesystem_move_ok_no_verification_error(self, tmp_path: Path) -> None:
+        """Movimiento real no lanza ActionVerificationError."""
+        from actions.filesystem import SistemaArchivos
+        fs = SistemaArchivos(raiz_permitida=tmp_path)
+        origen = tmp_path / "a.txt"
+        destino = tmp_path / "b.txt"
+        origen.write_text("dato")
+
+        resultado = await fs.mover_archivo(origen, destino)
+        assert resultado is True
+        assert not origen.exists()
+        assert destino.read_text() == "dato"
+
+
+# ---------------------------------------------------------------------------
+# MEJORAS — Dry-run
+# ---------------------------------------------------------------------------
+
+
+class TestDryRun:
+    """Tests del modo dry_run en acciones destructivas."""
+
+    @pytest.mark.asyncio
+    async def test_filesystem_dry_run_delete(self, tmp_path: Path) -> None:
+        """dry_run=True en eliminar_archivo devuelve DryRunResult sin borrar."""
+        from actions.filesystem import DryRunResult, SistemaArchivos
+        fs = SistemaArchivos(raiz_permitida=tmp_path, callback_confirmacion=_aprobar)
+        archivo = tmp_path / "test.txt"
+        archivo.write_text("x")
+
+        resultado = await fs.eliminar_archivo(archivo, dry_run=True)
+
+        assert isinstance(resultado, DryRunResult)
+        assert resultado.ejecutado is False
+        assert archivo.exists()
+
+    @pytest.mark.asyncio
+    async def test_filesystem_dry_run_move(self, tmp_path: Path) -> None:
+        """dry_run=True en mover_archivo devuelve DryRunResult sin mover."""
+        from actions.filesystem import DryRunResult, SistemaArchivos
+        fs = SistemaArchivos(raiz_permitida=tmp_path)
+        origen = tmp_path / "a.txt"
+        destino = tmp_path / "b.txt"
+        origen.write_text("dato")
+
+        resultado = await fs.mover_archivo(origen, destino, dry_run=True)
+
+        assert isinstance(resultado, DryRunResult)
+        assert resultado.ejecutado is False
+        assert origen.exists()
+        assert not destino.exists()
+
+    @pytest.mark.asyncio
+    async def test_terminal_dry_run_dangerous(self, tmp_path: Path) -> None:
+        """dry_run=True para comandos peligrosos devuelve DryRunResult sin ejecutar."""
+        from actions.filesystem import DryRunResult
+        from actions.terminal import Terminal
+        t = Terminal(directorio_trabajo=tmp_path, callback_confirmacion=_aprobar, sandbox_habilitado=True)
+
+        resultado = await t.ejecutar_comando("rm archivo.txt", dry_run=True)
+
+        assert isinstance(resultado, DryRunResult)
+        assert resultado.ejecutado is False
+        assert "rm" in resultado.descripcion.lower() or "archivo" in resultado.descripcion.lower()
+
+    @pytest.mark.asyncio
+    async def test_terminal_dry_run_safe_command(self, tmp_path: Path) -> None:
+        """dry_run=True para comandos seguros también devuelve DryRunResult."""
+        from actions.filesystem import DryRunResult
+        from actions.terminal import Terminal
+        t = Terminal(directorio_trabajo=tmp_path)
+
+        resultado = await t.ejecutar_comando("ls .", dry_run=True)
+
+        assert isinstance(resultado, DryRunResult)
+        assert resultado.ejecutado is False
+
+    @pytest.mark.asyncio
+    async def test_mail_dry_run_enviar(self) -> None:
+        """dry_run=True en mail.enviar_mensaje devuelve DryRunResult sin enviar."""
+        from actions.comms.mail import Mail
+        from actions.filesystem import DryRunResult
+        cs_mock = MagicMock()
+        mail = Mail(sistema=cs_mock, callback_confirmacion=_aprobar)
+
+        resultado = await mail.enviar_mensaje(
+            ["user@example.com"], "Asunto", "Cuerpo", dry_run=True
+        )
+
+        assert isinstance(resultado, DryRunResult)
+        assert resultado.ejecutado is False
+        cs_mock.ejecutar_applescript.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_imessage_dry_run_enviar(self) -> None:
+        """dry_run=True en imessage.enviar_mensaje devuelve DryRunResult sin enviar."""
+        from actions.comms.imessage import IMessage
+        from actions.filesystem import DryRunResult
+        cs_mock = MagicMock()
+        im = IMessage(sistema=cs_mock, callback_confirmacion=_aprobar)
+
+        resultado = await im.enviar_mensaje("+34612345678", "Hola", dry_run=True)
+
+        assert isinstance(resultado, DryRunResult)
+        assert resultado.ejecutado is False
+        cs_mock.ejecutar_applescript.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

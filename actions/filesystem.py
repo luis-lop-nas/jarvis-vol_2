@@ -12,11 +12,51 @@ import re
 import shutil
 from asyncio import Task
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
 _HOME = Path.home()
+
+# ---------------------------------------------------------------------------
+# Errores y tipos de resultado compartidos
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class DryRunResult:
+    """Resultado simulado de una operación en modo dry_run.
+
+    Ejemplo::
+        res = await fs.eliminar_archivo(ruta, dry_run=True)
+        if isinstance(res, DryRunResult):
+            print(res.efecto_esperado)
+    """
+
+    accion: str
+    descripcion: str
+    efecto_esperado: str
+    ejecutado: bool = field(default=False)
+
+
+class ActionVerificationError(Exception):
+    """La verificación post-acción falló: el estado real no coincide con el esperado.
+
+    El reflector interpreta este error como REINTENTAR o REPLANIFICAR.
+
+    Ejemplo::
+        except ActionVerificationError as e:
+            print(f"{e.accion}: esperado={e.esperado}, actual={e.actual}")
+    """
+
+    def __init__(self, accion: str, esperado: str, actual: str) -> None:
+        self.accion = accion
+        self.esperado = esperado
+        self.actual = actual
+        super().__init__(
+            f"Verificación fallida para '{accion}': esperado='{esperado}', actual='{actual}'"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Tipos públicos
@@ -245,8 +285,8 @@ class SistemaArchivos:
         await self._audit_log("crear_directorio", {"ruta": str(objetivo)})
         return True
 
-    async def mover_archivo(self, origen: Path, destino: Path) -> bool:
-        """Mueve o renombra un archivo.
+    async def mover_archivo(self, origen: Path, destino: Path, *, dry_run: bool = False) -> bool | DryRunResult:
+        """Mueve o renombra un archivo. Verifica el estado tras el movimiento.
 
         Ejemplo::
             await fs.mover_archivo(Path("~/a.txt"), Path("~/b.txt"))
@@ -254,11 +294,24 @@ class SistemaArchivos:
         src = self._validar(origen)
         dst = self._validar(destino)
 
+        if dry_run:
+            return DryRunResult(
+                accion="mover_archivo",
+                descripcion=f"Mover {src} → {dst}",
+                efecto_esperado=f"'{src.name}' ya no existirá en origen; aparecerá en '{dst}'",
+            )
+
         def _mover() -> None:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), dst)
 
         await asyncio.to_thread(_mover)
+
+        if src.exists():
+            raise ActionVerificationError("mover_archivo", "origen eliminado", f"'{src}' sigue existiendo")
+        if not dst.exists():
+            raise ActionVerificationError("mover_archivo", "destino creado", f"'{dst}' no existe")
+
         await self._audit_log("mover_archivo", {"origen": str(src), "destino": str(dst)})
         return True
 
@@ -283,27 +336,52 @@ class SistemaArchivos:
     # Operaciones destructivas — requieren confirmación
     # ------------------------------------------------------------------
 
-    async def eliminar_archivo(self, ruta: Path) -> bool:
-        """Elimina un archivo. Requiere confirmación explícita.
+    async def eliminar_archivo(self, ruta: Path, *, dry_run: bool = False) -> bool | DryRunResult:
+        """Elimina un archivo. Requiere confirmación explícita. Verifica que el archivo ya no exista.
 
         Ejemplo::
             ok = await fs.eliminar_archivo(Path("~/temporal.txt"))
         """
         objetivo = self._validar(ruta)
+
+        if dry_run:
+            return DryRunResult(
+                accion="eliminar_archivo",
+                descripcion=f"Eliminar {objetivo}",
+                efecto_esperado=f"'{objetivo.name}' dejará de existir",
+            )
+
         aprobado = await self._confirmar(f"Eliminar archivo: {objetivo}")
         if not aprobado:
             return False
+
         await asyncio.to_thread(objetivo.unlink, True)
+
+        if objetivo.exists():
+            raise ActionVerificationError(
+                "eliminar_archivo", "archivo eliminado", f"'{objetivo}' sigue existiendo"
+            )
+
         await self._audit_log("eliminar_archivo", {"ruta": str(objetivo)})
         return True
 
-    async def eliminar_directorio(self, ruta: Path, *, recursivo: bool = False) -> bool:
-        """Elimina un directorio. Siempre requiere Face ID + confirmación.
+    async def eliminar_directorio(
+        self, ruta: Path, *, recursivo: bool = False, dry_run: bool = False
+    ) -> bool | DryRunResult:
+        """Elimina un directorio. Siempre requiere Face ID + confirmación. Verifica el resultado.
 
         Ejemplo::
             ok = await fs.eliminar_directorio(Path("~/temporal/"), recursivo=True)
         """
         objetivo = self._validar(ruta)
+
+        if dry_run:
+            return DryRunResult(
+                accion="eliminar_directorio",
+                descripcion=f"Eliminar directorio {'recursivamente' if recursivo else ''}: {objetivo}",
+                efecto_esperado=f"'{objetivo}' y su contenido dejarán de existir",
+            )
+
         desc = f"Eliminar directorio {'recursivamente' if recursivo else ''}: {objetivo}"
         if self._auth is not None:
             await self._auth.require_auth(desc)
@@ -318,6 +396,12 @@ class SistemaArchivos:
                 objetivo.rmdir()
 
         await asyncio.to_thread(_eliminar)
+
+        if objetivo.exists():
+            raise ActionVerificationError(
+                "eliminar_directorio", "directorio eliminado", f"'{objetivo}' sigue existiendo"
+            )
+
         await self._audit_log("eliminar_directorio", {"ruta": str(objetivo), "recursivo": recursivo})
         return True
 

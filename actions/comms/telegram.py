@@ -19,6 +19,26 @@ async def _denegar(_: str) -> bool:
     return False
 
 
+class TelegramNotConfiguredError(Exception):
+    """El token de bot de Telegram no está configurado.
+
+    Ejemplo::
+        try:
+            tg = Telegram(token="")
+        except TelegramNotConfiguredError as e:
+            print(e)  # instrucciones de configuración
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "TELEGRAM_BOT_TOKEN no configurado.\n"
+            "Pasos para configurarlo:\n"
+            "  1. Habla con @BotFather en Telegram y crea un bot con /newbot\n"
+            "  2. Copia el token que te da (formato: 123456789:ABCDEF...)\n"
+            "  3. Añade TELEGRAM_BOT_TOKEN=<token> al archivo .env del proyecto"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Tipos públicos
 # ---------------------------------------------------------------------------
@@ -76,6 +96,8 @@ class Telegram:
         callback_confirmacion: CallbackConfirmacion | None = None,
         audit_log: AuditLog | None = None,
     ) -> None:
+        if not token or not token.strip():
+            raise TelegramNotConfiguredError()
         from telegram import Bot
         self._bot = Bot(token=token)
         self._confirmar = callback_confirmacion or _denegar

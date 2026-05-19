@@ -6,8 +6,41 @@ Toda interacción con el sistema macOS pasa por este módulo.
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Errores AppleScript
+# ---------------------------------------------------------------------------
+
+_SUGERENCIAS_AS: dict[int, str] = {
+    -600: "Abre la aplicación antes de usarla",
+    -609: "La app puede estar bloqueada; ciérrala y vuelve a abrirla",
+    -1708: "La app no estaba lista; el sistema reintentó automáticamente",
+    -1712: "La app no responde; verifica que no está colgada",
+    -10826: "Verifica permisos de Accesibilidad en Privacidad y Seguridad",
+}
+
+
+class AppleScriptError(Exception):
+    """Error al ejecutar un bloque de AppleScript.
+
+    Ejemplo::
+        try:
+            await cs.ejecutar_applescript_estricto(script)
+        except AppleScriptError as e:
+            print(f"Error {e.error_code} en {e.app_name}: {e.suggestion}")
+    """
+
+    def __init__(self, *, error_code: int, app_name: str, suggestion: str) -> None:
+        self.error_code = error_code
+        self.app_name = app_name
+        self.suggestion = suggestion
+        super().__init__(f"AppleScript error {error_code} en '{app_name}': {suggestion}")
 
 # ---------------------------------------------------------------------------
 # Tipos públicos
@@ -426,22 +459,74 @@ class ControlSistema:
         """
         return await self._applescript(script)
 
-    async def _applescript(self, script: str, *, timeout: float | None = None) -> str | None:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "osascript", "-e", script,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=timeout or self._TIMEOUT_AS,
-            )
-            if proc.returncode != 0:
+    async def ejecutar_applescript_estricto(self, script: str) -> str:
+        """Ejecuta AppleScript y lanza AppleScriptError si falla.
+
+        Ejemplo::
+            res = await cs.ejecutar_applescript_estricto('tell application "Safari" to get URL ...')
+        """
+        resultado = await self._applescript(script, _raise_on_error=True)
+        return resultado or ""
+
+    async def _applescript(
+        self,
+        script: str,
+        *,
+        timeout: float | None = None,
+        _raise_on_error: bool = False,
+    ) -> str | None:
+        for intento in range(2):
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "osascript", "-e", script,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=timeout or self._TIMEOUT_AS,
+                )
+                if proc.returncode != 0:
+                    err = self._parsear_error_as(script, stderr.decode(errors="replace"))
+                    if err.error_code == -1708 and intento == 0:
+                        await asyncio.sleep(0.5)
+                        continue
+                    _log.warning("AppleScript error: %s", err)
+                    if _raise_on_error:
+                        raise err
+                    return None
+                return stdout.decode(errors="replace").strip()
+            except AppleScriptError:
+                raise
+            except TimeoutError:
+                if _raise_on_error:
+                    raise AppleScriptError(
+                        error_code=-1712,
+                        app_name=self._extraer_app(script),
+                        suggestion=_SUGERENCIAS_AS.get(-1712, "La app no responde"),
+                    )
                 return None
-            return stdout.decode(errors="replace").strip()
-        except (TimeoutError, FileNotFoundError):
-            return None
+            except FileNotFoundError:
+                return None
+        return None
+
+    @staticmethod
+    def _parsear_error_as(script: str, stderr: str) -> AppleScriptError:
+        """Extrae código de error AppleScript de stderr y construye AppleScriptError."""
+        match = re.search(r'\((-?\d+)\)', stderr)
+        codigo = int(match.group(1)) if match else 0
+        app_name = ControlSistema._extraer_app(script)
+        return AppleScriptError(
+            error_code=codigo,
+            app_name=app_name,
+            suggestion=_SUGERENCIAS_AS.get(codigo, "Verifica que la aplicación esté en ejecución"),
+        )
+
+    @staticmethod
+    def _extraer_app(script: str) -> str:
+        """Extrae el nombre de app de un script AppleScript."""
+        m = re.search(r'application "([^"]+)"', script)
+        return m.group(1) if m else "desconocida"
 
     async def _bundle_a_nombre(self, bundle_id: str) -> str | None:
         """Resuelve un bundle ID a nombre de proceso."""

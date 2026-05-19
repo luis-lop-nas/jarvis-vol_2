@@ -92,6 +92,7 @@ class Settings(BaseSettings):
 
     # --- Agente ---
     agent_step_timeout_seconds: int = Field(default=120, ge=1)
+    agent_dry_run_mode: bool = Field(default=False)
 
     # --- Sesiones ---
     session_ttl_hours: int = Field(default=24, ge=1)

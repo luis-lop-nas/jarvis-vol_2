@@ -10,6 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
+from actions.filesystem import DryRunResult
 from actions.system import ControlSistema
 
 CallbackConfirmacion = Callable[[str], "asyncio.Future[bool]"]
@@ -213,8 +214,12 @@ class Mail:
         cuerpo: str,
         cc: list[str] | None = None,
         adjuntos: list[str] | None = None,
-    ) -> bool:
+        *,
+        dry_run: bool = False,
+    ) -> bool | DryRunResult:
         """Envía un correo. Requiere confirmación obligatoria.
+
+        Con dry_run=True describe el correo que se enviaría sin enviarlo.
 
         Ejemplo::
             ok = await mail.enviar_mensaje(
@@ -222,6 +227,14 @@ class Mail:
             )
         """
         desc = f"Enviar correo a {', '.join(destinatarios)}: {asunto}"
+
+        if dry_run:
+            return DryRunResult(
+                accion="mail.enviar_mensaje",
+                descripcion=desc,
+                efecto_esperado=f"Se enviaría un correo a {', '.join(destinatarios)} con asunto '{asunto}'",
+            )
+
         if self._auth is not None:
             await self._auth.require_auth(desc)
         aprobado = await self._confirmar(desc)

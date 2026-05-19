@@ -265,6 +265,22 @@ Basadas en patrones de clawdcursor, Self-Operating Computer y el paper Screen2AX
 - **Tests añadidos** (12): `test_bounds_calcula_center_automaticamente`, `test_verify_action_success_dos_señales`, `test_verify_action_failure_sin_cambios`, `test_verify_fallback_snapshot_falla`, `test_capturas_distintas_no_acumulan_contador`, `test_cinco_identicas_reduce_rate`, `test_diez_identicas_emite_alerta`, `test_captura_diferente_resetea_alerta`, `test_ocr_strategy_code_region`, `test_ocr_strategy_form_region`, `test_grounding_via_ax`, `test_grounding_via_ocr_fallback`.
 - **Suite completa: 304/304 verde (+ 1 skip fastmcp) en ~21s**.
 
+## ✅ Completado recientemente
+
+### Mejoras de robustez actions/ — OpenHands CodeAct + MacOS-Agent patterns (2026-05-19)
+
+- **`actions/system.py`** — `AppleScriptError(Exception)` con campos `error_code: int`, `app_name: str`, `suggestion: str`. `_parsear_error_as()` extrae el código de error de stderr con regex `\((-?\d+)\)` y construye la sugerencia desde un dict tipado. `_applescript()` modificado: captura stderr, reintenta 1 vez con delay 0.5s para código -1708 ("event not handled", timing transitorio), loggea `WARNING` en fallos no-transitorios. Nuevo método público `ejecutar_applescript_estricto()` que lanza `AppleScriptError` si el script falla. `_extraer_app()` extrae el nombre de app del script para el error.
+- **`actions/filesystem.py`** — `DryRunResult(dataclass)` y `ActionVerificationError(Exception)` exportados públicamente (importables en terminal/mail/imessage). `eliminar_archivo()`, `eliminar_directorio()` y `mover_archivo()` añaden parámetro `dry_run: bool = False`: si True, devuelven `DryRunResult` sin ejecutar. Verificación post-acción: eliminar verifica `not objetivo.exists()`, mover verifica `not src.exists() and dst.exists()`. Viola → `ActionVerificationError(accion, esperado, actual)`.
+- **`actions/terminal.py`** — `dry_run: bool = False` en `ejecutar_comando()`: si True devuelve `DryRunResult` sin lanzar el subproceso (con descripción del riesgo: BLOCKED/confirmación requerida/libre). Log `WARNING` automático cuando `returncode != 0` con los primeros 300 chars de stderr. Importa `DryRunResult` de `actions.filesystem`.
+- **`actions/comms/whatsapp.py`** — Refactor: `pagina` ahora es opcional (`pagina: Any | None = None`). Nuevo classmethod `initialize_session(session_dir, timeout_qr_s=60)`: lanza Playwright con `launch_persistent_context` (Chromium no-headless, session_dir persistente en `~/.jarvis/whatsapp_session/`), navega a WhatsApp Web, verifica sesión en 5s, si no hay QR espera hasta `timeout_qr_s`. Nuevo método `cerrar_sesion()` para cleanup de `_playwright_propio`/`_context_propio`. Soluciona la deuda "WhatsApp MCP requiere sesión inyectada".
+- **`actions/comms/telegram.py`** — `TelegramNotConfiguredError(Exception)` con mensaje de ayuda completo (paso a paso: BotFather + .env). Validación en `__init__`: si `token` vacío o solo espacios → lanza `TelegramNotConfiguredError` antes de instanciar `Bot`.
+- **`actions/comms/mail.py`** — `dry_run: bool = False` en `enviar_mensaje()`. Importa `DryRunResult` de `actions.filesystem`.
+- **`actions/comms/imessage.py`** — `dry_run: bool = False` en `enviar_mensaje()`. Importa `DryRunResult` de `actions.filesystem`.
+- **`config/settings.py`** — `agent_dry_run_mode: bool = False` para activar dry_run globalmente desde configuración.
+- **ADRs**: ADR-93 (AppleScriptError con retry -1708 — -1708 es "event not handled", fallo de timing al enviar evento AppleScript a app no lista; único reintento tras 0.5s), ADR-94 (DryRunResult y ActionVerificationError en filesystem.py como tipos compartidos — evita módulo _types.py sin necesidad; terminal/mail/imessage importan desde allí sin ciclos), ADR-95 (initialize_session usa launch_persistent_context — la API nativa de Playwright para sesiones con perfil de usuario persistente; evita gestionar cookies manualmente), ADR-96 (dry_run en capa de acción, no en el agente — permite que el planner simule planes antes de ejecutarlos sin cambiar la lógica del loop).
+- **Tests añadidos** (19): `test_applescript_app_not_running`, `test_applescript_retry_on_transient`, `test_applescript_error_strict_raises`, `test_applescript_error_fields`, `test_whatsapp_session_init_no_session`, `test_whatsapp_session_reutiliza_sesion_existente`, `test_telegram_missing_token_raises`, `test_telegram_whitespace_token_raises`, `test_telegram_valid_token_does_not_raise`, `test_filesystem_delete_verification`, `test_filesystem_move_verification_origen_persiste`, `test_filesystem_delete_ok_no_verification_error`, `test_filesystem_move_ok_no_verification_error`, `test_filesystem_dry_run_delete`, `test_filesystem_dry_run_move`, `test_terminal_dry_run_dangerous`, `test_terminal_dry_run_safe_command`, `test_mail_dry_run_enviar`, `test_imessage_dry_run_enviar`.
+- **Suite completa: 323/323 verde (+ 1 skip fastmcp) en ~23s** (antes 304).
+
 ## 🔄 En progreso
 
 _(nada activo)_
@@ -397,7 +413,7 @@ _(nada activo)_
 - `main.py` debe llamar a `solicitar_permiso_accesibilidad()` en startup si `verificar_permiso_accesibilidad()` devuelve False.
 
 ### Deudas previas
-- WhatsApp MCP requiere que el runtime inyecte una sesión Playwright ya inicializada; el servidor no la crea por defecto.
+- WhatsApp MCP: ~~requiere sesión inyectada~~ → resuelto 2026-05-19 (`initialize_session()`). El servidor MCP en `server_comms.py` puede llamar a `initialize_session()` en lugar de esperar inyección; pendiente actualizar el adaptador.
 - `pyobjc-framework-*` solo se importan dentro de los métodos para no romper en Linux/CI.
 - Pylance avisa de parámetros sin usar en `__aexit__`; es esperado (firma del protocolo).
 - No instalado todavía en el venv del proyecto: dependencias pesadas (chromadb, playwright, fastapi). `make install` las instala todas la primera vez.

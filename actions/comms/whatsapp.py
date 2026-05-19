@@ -1,7 +1,8 @@
 """WhatsApp Web vía Playwright.
 
-Requiere sesión activa de WhatsApp Web (QR escaneado previamente).
-No gestiona login automático — el usuario debe haber iniciado sesión.
+Soporta dos modos de uso:
+- Inyección de página: para integraciones donde Playwright ya está corriendo.
+- initialize_session(): lanza Chromium propio con sesión persistente en ~/.jarvis/whatsapp_session/.
 """
 
 from __future__ import annotations
@@ -15,9 +16,11 @@ from typing import Any
 
 CallbackConfirmacion = Callable[[str], "asyncio.Future[bool]"]
 
-_URL_WEB = "https://web.whatsapp.com/"
+_URL_WEB = "https://web.whatsapp.com"
 _SELECTOR_BUSQUEDA = 'div[contenteditable="true"][data-tab="3"]'
 _SELECTOR_INPUT_MENSAJE = 'div[contenteditable="true"][data-tab="10"]'
+_SELECTOR_QR = 'canvas[aria-label="Scan me!"], div[data-testid="qrcode"]'
+_SESSION_DIR_DEFAULT = Path.home() / ".jarvis" / "whatsapp_session"
 
 
 async def _denegar(_: str) -> bool:
@@ -67,18 +70,18 @@ class MensajeWA:
 class WhatsApp:
     """Adaptador de WhatsApp Web via Playwright.
 
-    Requiere que `pagina` ya esté abierta en web.whatsapp.com con sesión activa.
+    Uso recomendado: initialize_session() gestiona Playwright y la sesión automáticamente.
+    Uso legacy: inyectar `pagina` ya abierta con sesión activa.
 
     Ejemplo::
-        async with Navegador() as nav:
-            wa = WhatsApp(pagina=await nav._nueva_pagina())
-            await wa.inicializar()
-            ok = await wa.enviar_mensaje("Juan García", "Hola")
+        wa = await WhatsApp.initialize_session()
+        ok = await wa.enviar_mensaje("Juan García", "Hola")
+        await wa.cerrar_sesion()
     """
 
     def __init__(
         self,
-        pagina: Any,
+        pagina: Any | None = None,
         *,
         callback_confirmacion: CallbackConfirmacion | None = None,
         audit_log: AuditLog | None = None,
@@ -87,16 +90,85 @@ class WhatsApp:
         self._confirmar = callback_confirmacion or _denegar
         self._audit = audit_log
         self._inicializado = False
+        self._playwright_propio: Any = None
+        self._context_propio: Any = None
+
+    @classmethod
+    async def initialize_session(
+        cls,
+        *,
+        session_dir: Path | None = None,
+        timeout_qr_s: int = 60,
+        callback_confirmacion: CallbackConfirmacion | None = None,
+        audit_log: AuditLog | None = None,
+    ) -> "WhatsApp":
+        """Lanza Chromium no-headless con sesión persistente y espera el QR si es necesario.
+
+        Si ya existe una sesión válida en session_dir, la reutiliza sin mostrar el QR.
+        Si no hay sesión, espera hasta timeout_qr_s segundos a que el usuario escanee.
+
+        Ejemplo::
+            wa = await WhatsApp.initialize_session(timeout_qr_s=60)
+            # Escanea el QR si es la primera vez
+            print("Conectado:", wa._inicializado)
+        """
+        from playwright.async_api import async_playwright
+
+        ruta_sesion = (session_dir or _SESSION_DIR_DEFAULT).expanduser().resolve()
+        ruta_sesion.mkdir(parents=True, exist_ok=True)
+
+        playwright = await async_playwright().start()
+        context = await playwright.chromium.launch_persistent_context(
+            str(ruta_sesion),
+            headless=False,
+            args=["--no-sandbox"],
+        )
+        pagina = context.pages[0] if context.pages else await context.new_page()
+
+        wa = cls(pagina=pagina, callback_confirmacion=callback_confirmacion, audit_log=audit_log)
+        wa._playwright_propio = playwright
+        wa._context_propio = context
+
+        await pagina.goto(_URL_WEB)
+
+        # Verificar si ya hay sesión activa (barra de búsqueda visible en 5s)
+        try:
+            await pagina.wait_for_selector(_SELECTOR_BUSQUEDA, timeout=5_000)
+            wa._inicializado = True
+            return wa
+        except Exception:
+            pass
+
+        # Sin sesión: esperar a que el usuario escanee el QR
+        try:
+            await pagina.wait_for_selector(_SELECTOR_BUSQUEDA, timeout=timeout_qr_s * 1_000)
+            wa._inicializado = True
+        except Exception:
+            wa._inicializado = False
+
+        return wa
+
+    async def cerrar_sesion(self) -> None:
+        """Cierra el contexto Playwright creado por initialize_session().
+
+        Ejemplo::
+            await wa.cerrar_sesion()
+        """
+        if self._context_propio is not None:
+            await self._context_propio.close()
+            self._context_propio = None
+        if self._playwright_propio is not None:
+            await self._playwright_propio.stop()
+            self._playwright_propio = None
 
     async def inicializar(self, timeout_ms: int = 60_000) -> bool:
-        """Navega a WhatsApp Web y espera a que cargue la sesión.
+        """Navega a WhatsApp Web y espera a que cargue la sesión (modo inyección de página).
 
         Ejemplo::
             ok = await wa.inicializar()
         """
         try:
             await self._p.goto(_URL_WEB)
-            # Esperar a que aparezca la barra de búsqueda (indica sesión activa)
             await self._p.wait_for_selector(_SELECTOR_BUSQUEDA, timeout=timeout_ms)
             self._inicializado = True
             return True

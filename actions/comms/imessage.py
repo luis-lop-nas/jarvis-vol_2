@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from actions.filesystem import DryRunResult
 from actions.system import ControlSistema
 
 CallbackConfirmacion = Callable[[str], "asyncio.Future[bool]"]
@@ -172,13 +173,23 @@ class IMessage:
     # Envío — siempre requiere confirmación
     # ------------------------------------------------------------------
 
-    async def enviar_mensaje(self, contacto: str, texto: str) -> bool:
+    async def enviar_mensaje(self, contacto: str, texto: str, *, dry_run: bool = False) -> bool | DryRunResult:
         """Envía un iMessage. SIEMPRE requiere confirmación.
+
+        Con dry_run=True describe el mensaje que se enviaría sin enviarlo.
 
         Ejemplo::
             ok = await im.enviar_mensaje("+34612345678", "Hola, ¿cómo estás?")
         """
         desc_im = f"Enviar iMessage a {contacto}: «{texto[:80]}»"
+
+        if dry_run:
+            return DryRunResult(
+                accion="imessage.enviar_mensaje",
+                descripcion=desc_im,
+                efecto_esperado=f"Se enviaría un iMessage a '{contacto}' con el texto indicado",
+            )
+
         if self._auth is not None:
             await self._auth.require_auth(desc_im)
         aprobado = await self._confirmar(desc_im)
