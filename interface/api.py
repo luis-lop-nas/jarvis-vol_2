@@ -560,7 +560,9 @@ def crear_servidor(
                     req_id = payload.get("request_id")
                     if confirmation_manager is not None and req_id:
                         try:
-                            confirmation_manager.resolve(str(req_id), confirmed, sid)
+                            # Siempre usar el session_id de la conexión (URL param),
+                            # nunca el del payload — evita suplantación cross-session.
+                            confirmation_manager.resolve(str(req_id), confirmed, session_id)
                         except SecurityError:
                             await websocket.send_text(
                                 orjson.dumps({"type": "error", "message": "Violación de seguridad: sesión incorrecta"}).decode()

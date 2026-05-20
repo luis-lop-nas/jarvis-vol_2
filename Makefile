@@ -37,6 +37,14 @@ install: $(VENV)/bin/activate ## Crea venv e instala requirements + Playwright.
 	$(VENV)/bin/playwright install chromium
 	@echo "✅ Entorno listo. Activa con: source $(VENV)/bin/activate"
 
+.PHONY: install-dev
+install-dev: $(VENV)/bin/activate ## Instala dependencias de desarrollo (anthropic, openai, pytest...).
+	$(PIP) install --upgrade pip wheel
+	$(PIP) install -r requirements.txt
+	$(PIP) install -e ".[dev]"
+	$(VENV)/bin/playwright install chromium
+	@echo "✅ Entorno de desarrollo listo (incluye anthropic + openai SDKs)."
+
 $(VENV)/bin/activate:
 	$(PYTHON) -m venv $(VENV)
 

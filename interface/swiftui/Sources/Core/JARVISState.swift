@@ -1,16 +1,42 @@
 import Foundation
 import SwiftUI
 
+// MARK: - Fase del agente (colores semánticos P2, P7)
+
+enum AgentPhase: String, Equatable {
+    case thinking   // llamando al modelo
+    case acting     // ejecutando herramienta
+    case completed  // tarea completada
+    case error      // error o timeout
+}
+
 // MARK: - Tipos de datos
 
 struct LogStep: Identifiable, Codable {
     let id: String
     let description: String
     var status: StepStatus
+    var timestamp: Date = Date()
 
     enum StepStatus: String, Codable {
         case pending, active, completed, failed
     }
+
+    // elapsed relativo: "hace 2s" / "hace 1m"
+    var elapsed: String {
+        let seconds = Int(-timestamp.timeIntervalSinceNow)
+        if seconds < 60 { return "hace \(seconds)s" }
+        return "hace \(seconds / 60)m"
+    }
+}
+
+struct ChatMessage: Identifiable {
+    let id: UUID = UUID()
+    let role: ChatRole
+    let content: String
+    let timestamp: Date = Date()
+
+    enum ChatRole { case user, assistant }
 }
 
 struct AgentMessage: Identifiable, Codable {
@@ -78,6 +104,10 @@ struct ConfirmationRequest: Identifiable {
     let actionDescription: String
     let command: String?
     let isDestructive: Bool
+    let actionType: String         // e.g. "filesystem.eliminar"
+    let affectedItems: [String]?   // lista de archivos/elementos afectados
+    let affectedCount: Int         // total de elementos afectados
+    let createdAt: Date = Date()
 }
 
 // MARK: - Estado de la UI
@@ -108,11 +138,25 @@ final class JARVISState {
     var uiState: UIState = .silent
     var sessionId: String = UUID().uuidString
     var isConnected: Bool = false
+    var isDisconnected: Bool = false      // sin conexión >5s (P7)
     var pendingConfirmation: ConfirmationRequest? = nil
     var messages: [AgentMessage] = []
     var currentProgress: Double = 0.0
     var focusModalShown: Bool = false
     var inputText: String = ""
+
+    // P2 — Fase y herramienta activa para colores semánticos en notch
+    var agentPhase: AgentPhase = .thinking
+    var currentToolName: String? = nil
+
+    // P4 — Historial de conversación e info del modelo
+    var conversationHistory: [ChatMessage] = []
+    var lastModelUsed: String? = nil
+    var lastTokenCount: Int? = nil
+    var lastCostUsd: Double? = nil
+
+    // P7 — Mensaje de error visible en notch
+    var errorMessage: String? = nil
 
     private var logSteps: [LogStep] = []
 
@@ -120,16 +164,38 @@ final class JARVISState {
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
             currentProgress = update.progress
 
+            // Extraer metadatos de modelo/tokens del campo step
+            if let stepDict = update.step {
+                if case .string(let model) = stepDict["modelo"] ?? stepDict["model"] {
+                    lastModelUsed = model
+                }
+                if case .int(let tokens) = stepDict["tokens"] ?? stepDict["total_tokens"] {
+                    lastTokenCount = tokens
+                }
+                if case .double(let cost) = stepDict["cost_usd"] ?? stepDict["total_cost_usd"] {
+                    lastCostUsd = cost
+                }
+            }
+
             switch update.type {
-            case "thinking":
+            case "thinking", "pensando":
+                agentPhase = .thinking
+                currentToolName = nil
                 if case .focusModal(let q, let r, _) = uiState {
                     uiState = .focusModal(query: q, response: r, steps: logSteps)
                 } else {
-                    uiState = .notchPulse(status: update.message, model: "")
+                    uiState = .notchPulse(status: update.message, model: lastModelUsed ?? "")
                 }
                 _addStep(id: UUID().uuidString, description: update.message, status: .active)
 
-            case "acting":
+            case "acting", "actuando":
+                agentPhase = .acting
+                let toolName = update.step.flatMap { dict -> String? in
+                    guard case .string(let t) = dict["herramienta"] ?? dict["tool"] else { return nil }
+                    return t
+                }
+                currentToolName = toolName
+
                 let step = update.step.flatMap { dict -> LogStep? in
                     guard case .string(let id) = dict["id"],
                           case .string(let desc) = dict["descripcion"] else { return nil }
@@ -143,7 +209,8 @@ final class JARVISState {
                     uiState = .edgeLog(steps: logSteps)
                 }
 
-            case "waiting":
+            case "waiting", "esperando":
+                agentPhase = .thinking
                 let actionId = (update.step.flatMap { dict -> String? in
                     guard case .string(let id) = dict["id"] else { return nil }
                     return id
@@ -152,6 +219,20 @@ final class JARVISState {
                     guard case .bool(let v) = dict["requiere_confirmacion"] else { return nil }
                     return v
                 }) ?? false
+                let actionType = (update.step.flatMap { dict -> String? in
+                    guard case .string(let t) = dict["herramienta"] ?? dict["action_type"] else { return nil }
+                    return t
+                }) ?? ""
+                // affected_items: array de strings
+                let affectedItems: [String]? = nil
+                let affectedCount: Int
+                if let stepDict = update.step,
+                   case .int(let count) = stepDict["affected_count"] {
+                    affectedCount = count
+                } else {
+                    affectedCount = 0
+                }
+
                 pendingConfirmation = ConfirmationRequest(
                     id: actionId,
                     actionDescription: update.message,
@@ -159,14 +240,21 @@ final class JARVISState {
                         guard case .string(let cmd) = dict["herramienta"] else { return nil }
                         return cmd
                     },
-                    isDestructive: isDestructive
+                    isDestructive: isDestructive,
+                    actionType: actionType,
+                    affectedItems: affectedItems,
+                    affectedCount: affectedCount
                 )
                 focusModalShown = true
 
-            case "done":
+            case "done", "listo":
+                agentPhase = .completed
+                currentToolName = nil
                 _markAllStepsCompleted()
                 if case .focusModal(let q, _, _) = uiState {
                     uiState = .focusModal(query: q, response: update.message, steps: logSteps)
+                    // Añadir al historial de conversación
+                    conversationHistory.append(ChatMessage(role: .assistant, content: update.message))
                 }
                 pendingConfirmation = nil
                 currentProgress = 1.0
@@ -175,11 +263,24 @@ final class JARVISState {
                 }
 
             case "error":
+                agentPhase = .error
+                currentToolName = nil
+                errorMessage = update.message
                 _markAllStepsFailed()
                 if case .focusModal(let q, _, _) = uiState {
                     uiState = .focusModal(query: q, response: "Error: \(update.message)", steps: logSteps)
+                } else {
+                    uiState = .notchPulse(status: update.message, model: lastModelUsed ?? "")
                 }
                 pendingConfirmation = nil
+                // Auto-reset a silent tras 5s
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+                    withAnimation(.easeOut(duration: 0.5)) {
+                        self?.uiState = .silent
+                        self?.agentPhase = .thinking
+                        self?.errorMessage = nil
+                    }
+                }
 
             default:
                 break
@@ -191,11 +292,18 @@ final class JARVISState {
         }
     }
 
+    func addUserMessage(_ text: String) {
+        conversationHistory.append(ChatMessage(role: .user, content: text))
+    }
+
     func reset() {
         logSteps = []
         pendingConfirmation = nil
         currentProgress = 0.0
         inputText = ""
+        agentPhase = .thinking
+        currentToolName = nil
+        errorMessage = nil
     }
 
     // MARK: Private

@@ -47,8 +47,11 @@ class ConfirmationRequest(BaseModel):
     session_id: str = ""  # sesión propietaria; "" = sin scoping (compatibilidad)
     action_description: str
     command: str | None = None
+    action_type: str = ""  # ej: "eliminar", "enviar_email" — para UI adaptativa
     risk_level: str  # "moderate" | "dangerous"
     requires_auth: bool
+    affected_items: list[str] | None = None  # lista de paths/nombres afectados
+    affected_count: int = 0                  # total cuando affected_items está truncado
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     expires_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC) + timedelta(seconds=60)
@@ -118,8 +121,11 @@ class ConfirmationManager:
         self,
         action_description: str,
         command: str | None = None,
+        action_type: str = "",
         risk_level: str = "moderate",
         requires_auth: bool = False,
+        affected_items: list[str] | None = None,
+        affected_count: int = 0,
         session_id: str = "",
     ) -> ConfirmationResult:
         """Pausa el agente y espera confirmación del usuario (máx. 60 segundos).
@@ -155,8 +161,11 @@ class ConfirmationManager:
             session_id=session_id,
             action_description=action_description,
             command=command,
+            action_type=action_type,
             risk_level=risk_level,
             requires_auth=requires_auth,
+            affected_items=affected_items,
+            affected_count=affected_count if affected_count else (len(affected_items) if affected_items else 0),
             created_at=now,
             expires_at=now + timedelta(seconds=_CONFIRMATION_TIMEOUT),
         )
@@ -173,8 +182,11 @@ class ConfirmationManager:
                         "confirmation_id": req_id,
                         "action": action_description,
                         "command": command,
+                        "action_type": request.action_type,
                         "risk_level": risk_level,
                         "requires_auth": requires_auth,
+                        "affected_items": request.affected_items,
+                        "affected_count": request.affected_count,
                         "expires_in": int(_CONFIRMATION_TIMEOUT),
                     },
                 })

@@ -1,7 +1,7 @@
 # --- Núcleo de agentes ---
 fastmcp>=2.0.0
-anthropic>=0.40.0
-openai>=1.55.0
+# anthropic>=0.40.0  # SOLO para desarrollo con Claude Code — nunca en producción (CLAUDE.md)
+# openai>=1.55.0     # SOLO para desarrollo con Claude Code — nunca en producción (CLAUDE.md)
 langchain>=0.3.0
 langchain-core>=0.3.0
 langgraph>=0.2.31
@@ -40,14 +40,11 @@ pynput>=1.7.7
 playwright>=1.48.0
 
 # --- OCR / visión ---
-pillow>=11.0.0
+Pillow>=11.0.0
 pytesseract>=0.3.13
 
 # --- Comunicaciones ---
 python-telegram-bot>=21.0
-pytesseract>=0.3.13
-Pillow>=11.0.0
-pyautogui>=0.9.54
 
 # --- Utilidades ---
 tenacity>=9.0.0
@@ -55,13 +52,7 @@ orjson>=3.10.0
 pyyaml>=6.0.2
 watchdog>=6.0.0
 psutil>=6.0.0
+send2trash>=1.8.0
 
 # --- Opcional: LiteLLM (instalar con: pip install litellm) ---
 # litellm>=1.40.0  # descomentar para activar LITELLM_ENABLED=true
-
-# --- Desarrollo / tests ---
-pytest>=8.3.0
-pytest-asyncio>=0.24.0
-pytest-mock>=3.14.0
-ruff>=0.7.0
-mypy>=1.13.0

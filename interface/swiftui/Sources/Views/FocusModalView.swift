@@ -1,17 +1,16 @@
 import SwiftUI
 
 // MARK: - FocusModalView
-// Panel central — invocado con ⌘Space.
-// Tamaño: 480×auto (máx 600px).
-// Posición: center-screen, 130px desde arriba.
-// Fondo: #0d0d0f opacity 0.94 con NSVisualEffectView vibrancy.
-// Ring: 0.5px rgba(55,138,221,0.2). BR: 20px.
+// Panel central — invocado con ⌘⌥Space.
+// Incluye: historial scrollable, respuesta streaming, input inline, footer de metadata.
 
 struct FocusModalView: View {
     @Bindable var state: JARVISState
     let onClose: () -> Void
     let onSend: (String) -> Void
     let onConfirm: (String, Bool) -> Void
+
+    @State private var replyText: String = ""
 
     private let bg = Color(red: 0.05, green: 0.05, blue: 0.06)
     private let blue = Color(red: 0.22, green: 0.54, blue: 0.87)
@@ -39,7 +38,7 @@ struct FocusModalView: View {
                 modalContent
             }
             .frame(width: 480)
-            .frame(maxHeight: 600)
+            .frame(maxHeight: 620)
             .background {
                 ZStack {
                     VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
@@ -72,11 +71,16 @@ struct FocusModalView: View {
 
     private var modalContent: some View {
         VStack(spacing: 0) {
-            // Header
             header
             Divider().opacity(0.15)
 
-            // Response (streaming)
+            // Historial de conversación (P4b)
+            if !state.conversationHistory.isEmpty {
+                conversationHistory
+                Divider().opacity(0.10)
+            }
+
+            // Respuesta actual (streaming)
             if !responseText.isEmpty {
                 responseArea
                 Divider().opacity(0.12)
@@ -99,10 +103,11 @@ struct FocusModalView: View {
                 Divider().opacity(0.12)
             }
 
-            // Input bar
-            inputBar
+            // Input inline (P4a)
+            inlineReply
+            Divider().opacity(0.08)
 
-            // Footer hint
+            // Footer hint + metadata de modelo (P4d)
             footer
         }
     }
@@ -112,7 +117,7 @@ struct FocusModalView: View {
     private var header: some View {
         HStack(spacing: 10) {
             Circle()
-                .fill(Color(red: 0.22, green: 0.54, blue: 0.87))
+                .fill(blue)
                 .frame(width: 24, height: 24)
                 .overlay(
                     Text("J")
@@ -133,6 +138,27 @@ struct FocusModalView: View {
         .padding(.vertical, 14)
     }
 
+    // Historial scrollable (últimos mensajes del turno)
+    private var conversationHistory: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(state.conversationHistory) { msg in
+                        MessageBubble(message: msg)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+            }
+            .frame(maxHeight: 180)
+            .onChange(of: state.conversationHistory.count) { _, _ in
+                if let last = state.conversationHistory.last {
+                    withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                }
+            }
+        }
+    }
+
     private var responseArea: some View {
         ScrollView {
             Text(responseText)
@@ -144,7 +170,7 @@ struct FocusModalView: View {
                 .padding(.vertical, 14)
                 .textSelection(.enabled)
         }
-        .frame(maxHeight: 240)
+        .frame(maxHeight: 200)
     }
 
     private var actionLog: some View {
@@ -163,33 +189,59 @@ struct FocusModalView: View {
         .padding(.vertical, 10)
     }
 
-    private var inputBar: some View {
-        HStack(spacing: 10) {
-            TextField("Escribe un mensaje…", text: $state.inputText)
+    // Input inline para respuesta rápida (P4a)
+    private var inlineReply: some View {
+        HStack(spacing: 8) {
+            TextField("responder…", text: $replyText)
                 .textFieldStyle(.plain)
-                .font(.system(size: 13))
+                .font(.system(size: 12))
                 .foregroundStyle(.white)
-                .onSubmit { _sendMessage() }
+                .onSubmit { _sendReply() }
 
-            Button(action: _sendMessage) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(6)
-                    .background(blue, in: Circle())
+            if !replyText.isEmpty {
+                Button(action: _sendReply) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(blue)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
-            .disabled(state.inputText.isEmpty)
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.vertical, 8)
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(8)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
+    // Footer con hint + metadata del modelo (P4d)
     private var footer: some View {
-        Text("Esc para cerrar · ⌘↵ para confirmar")
-            .font(.system(size: 10))
-            .foregroundStyle(textMuted)
-            .padding(.bottom, 10)
+        HStack(spacing: 0) {
+            Text("Esc · ⌘⌥Space para cerrar")
+                .font(.system(size: 10))
+                .foregroundStyle(textMuted)
+
+            Spacer()
+
+            if let model = state.lastModelUsed {
+                Text(model)
+                    .font(.system(size: 10))
+                    .foregroundStyle(textMuted)
+            }
+            if let tokens = state.lastTokenCount {
+                Text("  \(tokens) tok")
+                    .font(.system(size: 10))
+                    .foregroundStyle(textMuted)
+            }
+            if let cost = state.lastCostUsd, cost > 0 {
+                Text(String(format: "  $%.4f", cost))
+                    .font(.system(size: 10))
+                    .foregroundStyle(textMuted)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 8)
     }
 
     @ViewBuilder
@@ -210,11 +262,41 @@ struct FocusModalView: View {
         }
     }
 
-    private func _sendMessage() {
-        let text = state.inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func _sendReply() {
+        let text = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        state.inputText = ""
+        replyText = ""
+        state.addUserMessage(text)
         onSend(text)
+    }
+}
+
+// MARK: - Burbuja de mensaje en historial
+
+private struct MessageBubble: View {
+    let message: ChatMessage
+
+    private let blue = Color(red: 0.22, green: 0.54, blue: 0.87)
+
+    var body: some View {
+        HStack {
+            if message.role == .user { Spacer(minLength: 40) }
+
+            Text(message.content)
+                .font(.system(size: 12))
+                .foregroundStyle(message.role == .user ? .white : .white.opacity(0.85))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    message.role == .user
+                        ? blue.opacity(0.3)
+                        : Color.white.opacity(0.06),
+                    in: RoundedRectangle(cornerRadius: 10)
+                )
+                .lineLimit(6)
+
+            if message.role == .assistant { Spacer(minLength: 40) }
+        }
     }
 }
 

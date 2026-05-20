@@ -2,32 +2,34 @@ import SwiftUI
 
 // MARK: - EdgeLogView
 // Strip de 3px en el borde derecho. Al hover (<20px) expande a 200px.
-// Sin border-radius en lado derecho. BR=10 en lado izquierdo.
-// Fondo: rgba(13,13,15, 0.92) sin blur.
+// Click ancla el panel abierto (isPinned). Timestamps relativos en cada paso.
 
 struct EdgeLogView: View {
     let steps: [LogStep]
-    @State private var hovered = false
+    @State private var isHovered = false
+    @State private var isPinned = false
 
     private let stripColor = Color(red: 0.22, green: 0.54, blue: 0.87).opacity(0.4)
     private let bg = Color(red: 0.05, green: 0.05, blue: 0.06).opacity(0.92)
     private let expandedWidth: CGFloat = 200
 
+    private var isExpanded: Bool { isHovered || isPinned }
+
     var body: some View {
         HStack(spacing: 0) {
-            if hovered {
+            if isExpanded {
                 stepList
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
 
-            // Strip visual
+            // Strip visual — desaparece cuando está expandido
             Rectangle()
-                .fill(hovered ? Color.clear : stripColor)
-                .frame(width: hovered ? 0 : 3)
+                .fill(isExpanded ? Color.clear : stripColor)
+                .frame(width: isExpanded ? 0 : 3)
         }
-        .frame(width: hovered ? expandedWidth : 3)
+        .frame(width: isExpanded ? expandedWidth : 3)
         .frame(maxHeight: min(CGFloat(steps.count) * 36 + 20, 400))
-        .background(hovered ? bg : .clear)
+        .background(isExpanded ? bg : .clear)
         .clipShape(
             .rect(
                 topLeadingRadius: 10,
@@ -36,12 +38,27 @@ struct EdgeLogView: View {
                 topTrailingRadius: 0
             )
         )
-        .onHover { over in
-            withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
-                hovered = over
+        .overlay(alignment: .topTrailing) {
+            // Indicador de anclado (P3c)
+            if isPinned {
+                Image(systemName: "pin.fill")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .padding(6)
             }
         }
-        .animation(.spring(response: 0.25, dampingFraction: 0.85), value: hovered)
+        .onHover { over in
+            withAnimation(.interpolatingSpring(stiffness: 300, damping: 28)) {
+                isHovered = over
+                if !over && isPinned { /* mantener abierto */ }
+            }
+        }
+        .onTapGesture {
+            withAnimation(.interpolatingSpring(stiffness: 300, damping: 28)) {
+                isPinned.toggle()
+            }
+        }
+        .animation(.interpolatingSpring(stiffness: 300, damping: 28), value: isExpanded)
     }
 
     private var stepList: some View {
@@ -58,7 +75,7 @@ struct EdgeLogView: View {
     }
 }
 
-// MARK: - Fila de paso
+// MARK: - Fila de paso (con elapsed time)
 
 private struct StepRow: View {
     let step: LogStep
@@ -66,10 +83,17 @@ private struct StepRow: View {
     var body: some View {
         HStack(spacing: 8) {
             stepIcon
+
             Text(step.description)
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.85))
+                .font(.system(size: 10))
+                .foregroundStyle(.white.opacity(0.8))
                 .lineLimit(2)
+
+            Spacer(minLength: 4)
+
+            Text(step.elapsed)
+                .font(.system(size: 9))
+                .foregroundStyle(.white.opacity(0.35))
         }
     }
 
@@ -79,28 +103,32 @@ private struct StepRow: View {
         case .completed:
             Image(systemName: "checkmark")
                 .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(Color.green)
+                .foregroundStyle(Color(red: 0.11, green: 0.62, blue: 0.46))
+                .frame(width: 12)
         case .active:
             ProgressView()
                 .scaleEffect(0.55)
-                .tint(Color(red: 0.22, green: 0.54, blue: 0.87))
+                .tint(Color(red: 0.36, green: 0.78, blue: 1.0))
+                .frame(width: 12)
         case .failed:
             Image(systemName: "xmark")
                 .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(Color.red.opacity(0.8))
+                .foregroundStyle(Color(red: 0.85, green: 0.27, blue: 0.22).opacity(0.8))
+                .frame(width: 12)
         case .pending:
             Circle()
                 .fill(.white.opacity(0.3))
                 .frame(width: 4, height: 4)
+                .frame(width: 12)
         }
     }
 }
 
 #Preview {
     EdgeLogView(steps: [
-        LogStep(id: "1", description: "Leyendo archivo…", status: .completed),
-        LogStep(id: "2", description: "Procesando datos", status: .active),
-        LogStep(id: "3", description: "Guardando resultado", status: .pending),
+        LogStep(id: "1", description: "Leyendo archivo main.py", status: .completed),
+        LogStep(id: "2", description: "Procesando dependencias del módulo", status: .active),
+        LogStep(id: "3", description: "Guardando resultado en disco", status: .pending),
     ])
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
     .background(.black)

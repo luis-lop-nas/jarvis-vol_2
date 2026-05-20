@@ -46,8 +46,8 @@ source .venv/bin/activate
 make dev          # arranca servicios Docker + agente
 ```
 
-La API REST queda disponible en `http://localhost:8080` y el WebSocket en
-`ws://localhost:8081/ws`.
+La API REST queda disponible en `http://localhost:8765` y el WebSocket en
+`ws://localhost:8765/ws`.
 
 ## Tests
 
@@ -72,7 +72,7 @@ make format       # autoformato con ruff
 Usuario (voz / texto)
     │
     ▼
-STT (Groq)
+STT (Groq) [planned]
     │
     ▼
 Daemon Python · LangGraph
@@ -84,10 +84,10 @@ Daemon Python · LangGraph
     └── Security     ──► Sandbox · ConfirmationManager · AuditLog
     │
     ▼
-FastAPI + WebSocket  ◄──► SwiftUI overlay (Metal)
+FastAPI + WebSocket (:8765)  ◄──► SwiftUI overlay (Metal)
     │
     ▼
-TTS (Kokoro local)
+TTS (Kokoro local) [planned]
 ```
 
 ## Modelos de IA
@@ -96,6 +96,7 @@ TTS (Kokoro local)
 |-----|--------|-----|
 | Cerebro principal | Kimi K2.6 (gratis) | Razonamiento, planificación |
 | Fallback | DeepSeek V3.2 | Tareas largas, coste reducido |
+| Fallback gratuito | OpenRouter free tier | Modelos variados sin coste |
 | Local / privado | Ollama gemma4:4b | Datos sensibles, sin internet |
 | Embeddings | nomic-embed-text | Memoria semántica en ChromaDB |
 
@@ -188,3 +189,11 @@ El dashboard se actualiza automáticamente cada 5 segundos.
 | `make logs` | Audit log en tiempo real |
 | `make clean` | Limpia caches y builds |
 | `make reset` | Limpieza total + reinstalación |
+| `make install-dev` | Instala entorno de desarrollo (anthropic + openai SDKs) |
+
+## Estado actual
+
+Ver [PROGRESS.md](./PROGRESS.md) para el estado detallado de cada módulo y las
+decisiones de arquitectura (ADRs) registradas.
+
+Suite de tests: 464/464 verde (+ 1 skip fastmcp no instalado).

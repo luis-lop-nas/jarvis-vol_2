@@ -46,6 +46,7 @@ final class WebSocketClient: NSObject, URLSessionWebSocketDelegate {
 
     var onUpdate: ((AgentUpdate) -> Void)?
     var onConnectionChange: ((Bool) -> Void)?
+    var onLongDisconnect: (() -> Void)?  // llamado cuando reconexión tarda >5s (P7c)
 
     override init() {
         super.init()
@@ -105,6 +106,12 @@ final class WebSocketClient: NSObject, URLSessionWebSocketDelegate {
         onConnectionChange?(false)
         let delay = reconnectDelay
         reconnectDelay = min(reconnectDelay * 2, maxDelay)
+
+        // Notificar desconexión prolongada cuando el delay supera 5s (P7c)
+        if delay > 5.0 {
+            onLongDisconnect?()
+        }
+
         Task {
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             if self.isRunning {

@@ -1,6 +1,12 @@
 import AppKit
 import SwiftUI
 
+// MARK: - Posición preferida para InlineView por app (P5a)
+
+enum InlinePosition {
+    case topRight, topLeft, bottomRight, bottomLeft, bottomCenter
+}
+
 // MARK: - WindowManager
 // Gestiona ventanas flotantes sin titlebar en niveles de ventana correctos.
 
@@ -11,6 +17,23 @@ final class WindowManager {
     private var edgeWindow: NSWindow?
     private var modalWindow: NSWindow?
     private var inlineWindow: NSWindow?
+    private var onboardingWindow: NSWindow?
+
+    // Posición preferida de InlineView por bundleIdentifier de la app activa (P5a).
+    // Extensible sin recompilar añadiendo entradas a este dict.
+    private let appPositionPreferences: [String: InlinePosition] = [
+        "com.microsoft.VSCode":                .bottomCenter,  // lejos de CodeLens
+        "com.apple.dt.Xcode":                  .bottomCenter,
+        "com.apple.finder":                    .topRight,
+        "com.apple.Safari":                    .topRight,
+        "com.google.Chrome":                   .topRight,
+        "org.mozilla.firefox":                 .topRight,
+        "com.apple.mail":                      .bottomRight,
+        "com.tinyspeck.slackmacgap":           .bottomRight,
+        "com.apple.Terminal":                  .bottomLeft,
+        "com.googlecode.iterm2":               .bottomLeft,
+        "dev.warp.Warp-Stable":                .bottomLeft,
+    ]
 
     private init() {}
 
@@ -37,14 +60,13 @@ final class WindowManager {
         notchWindow = nil
     }
 
-    // MARK: - Edge window (right edge, statusBar level)
+    // MARK: - Edge window (right edge, floating level)
 
     func showEdge<V: View>(content: V) {
         let screen = NSScreen.main ?? NSScreen.screens[0]
         let screenFrame = screen.visibleFrame
-        let width: CGFloat = 3  // starts collapsed; SwiftUI manages expansion
         let height = screenFrame.height
-        let x = screenFrame.maxX - width
+        let x = screenFrame.maxX - 200
         let y = screenFrame.minY
 
         edgeWindow = _makeWindow(
@@ -62,13 +84,13 @@ final class WindowManager {
         edgeWindow = nil
     }
 
-    // MARK: - Modal window (center-screen, modal level)
+    // MARK: - Modal window (center-screen, modalPanel level)
 
     func showModal<V: View>(content: V) {
         let screen = NSScreen.main ?? NSScreen.screens[0]
         let screenFrame = screen.frame
         let width: CGFloat = 480
-        let height: CGFloat = 600
+        let height: CGFloat = 620
         let x = screenFrame.midX - width / 2
         let y = screenFrame.maxY - 130 - height
 
@@ -85,8 +107,20 @@ final class WindowManager {
         modalWindow = nil
     }
 
-    // MARK: - Inline window (near cursor/active window)
+    // MARK: - Inline window (posición adaptativa por app)
 
+    func showInline<V: View>(content: V) {
+        let bundleId = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
+        let position = appPositionPreferences[bundleId] ?? .bottomRight
+        let frame = _inlineFrame(for: position)
+
+        inlineWindow = _makeWindow(frame: frame, level: .floating, content: content)
+        inlineWindow?.isOpaque = false
+        inlineWindow?.backgroundColor = .clear
+        inlineWindow?.orderFront(nil)
+    }
+
+    // Sobrecarga con punto explícito (retrocompatibilidad)
     func showInline<V: View>(at point: CGPoint, content: V) {
         inlineWindow = _makeWindow(
             frame: NSRect(x: point.x, y: point.y, width: 280, height: 120),
@@ -101,7 +135,52 @@ final class WindowManager {
         inlineWindow = nil
     }
 
+    // MARK: - Onboarding window (P8)
+
+    func showOnboarding<V: View>(content: V) {
+        let screen = NSScreen.main ?? NSScreen.screens[0]
+        let screenFrame = screen.frame
+        let width: CGFloat = 400
+        let height: CGFloat = 320
+        let x = screenFrame.midX - width / 2
+        let y = screenFrame.midY - height / 2
+
+        onboardingWindow = _makeWindow(
+            frame: NSRect(x: x, y: y, width: width, height: height),
+            level: .modalPanel,
+            content: content
+        )
+        onboardingWindow?.orderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func closeOnboarding() {
+        onboardingWindow?.orderOut(nil)
+        onboardingWindow = nil
+    }
+
     // MARK: Private
+
+    private func _inlineFrame(for position: InlinePosition) -> NSRect {
+        let screen = NSScreen.main ?? NSScreen.screens[0]
+        let sf = screen.visibleFrame
+        let w: CGFloat = 280
+        let h: CGFloat = 80
+        let margin: CGFloat = 16
+
+        switch position {
+        case .topRight:
+            return NSRect(x: sf.maxX - w - margin, y: sf.maxY - h - margin, width: w, height: h)
+        case .topLeft:
+            return NSRect(x: sf.minX + margin, y: sf.maxY - h - margin, width: w, height: h)
+        case .bottomRight:
+            return NSRect(x: sf.maxX - w - margin, y: sf.minY + margin, width: w, height: h)
+        case .bottomLeft:
+            return NSRect(x: sf.minX + margin, y: sf.minY + margin, width: w, height: h)
+        case .bottomCenter:
+            return NSRect(x: sf.midX - w / 2, y: sf.minY + margin, width: w, height: h)
+        }
+    }
 
     private func _makeWindow<V: View>(
         frame: NSRect,

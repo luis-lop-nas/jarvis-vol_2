@@ -892,6 +892,69 @@ class TestConfirmationScoping:
 
         assert result.confirmed is True
 
+    def test_confirmation_websocket_uses_connection_session_id(self):
+        """El handler WS usa el session_id de la conexión (URL param) al llamar resolve(),
+        no el session_id que el cliente envía en el payload del mensaje."""
+        import orjson
+        from unittest.mock import AsyncMock, MagicMock
+
+        from starlette.testclient import TestClient
+
+        from interface.api import (
+            _rate_state,
+            _session_queues,
+            _session_tasks,
+            crear_servidor,
+        )
+        from interface.api_auth import get_api_token
+        from interface.websocket import ConnectionManager
+
+        # Limpiar estado de módulo para no interferir con otros tests
+        _rate_state.clear()
+        _session_tasks.clear()
+        _session_queues.clear()
+
+        conn_session = "conn-ws-session"
+        req_id = "test-req-ws-scoping"
+
+        # ConfirmationManager mock — resolve() captura los args sin side effects
+        cm = MagicMock()
+        cm.get_pending.return_value = []
+
+        # Agente mínimo para que el WS handler no falle al inicializar
+        agente = MagicMock()
+
+        async def _noop_run(*args, **kwargs):
+            return
+            yield  # noqa: unreachable — convierte en async generator
+
+        agente.run = _noop_run
+        agente.get_state = MagicMock(return_value=None)
+        agente.resume = AsyncMock(return_value=True)
+        agente.cancel = AsyncMock(return_value=True)
+
+        manager = ConnectionManager()
+        app = crear_servidor(agente, manager, confirmation_manager=cm)
+
+        token = get_api_token()
+        with TestClient(app) as tc:
+            with tc.websocket_connect(
+                f"/ws?session_id={conn_session}&token={token}"
+            ) as ws:
+                ws.receive_text()  # session_state inicial
+                # Enviar "confirm" con session_id DIFERENTE en el payload (intento de suplantación)
+                ws.send_text(
+                    orjson.dumps({
+                        "type": "confirm",
+                        "confirmed": True,
+                        "request_id": req_id,
+                        "session_id": "evil-session",  # debería ser ignorado
+                    }).decode()
+                )
+
+        # resolve() debe haberse llamado con el session_id de la CONEXIÓN, no del payload
+        cm.resolve.assert_called_once_with(req_id, True, conn_session)
+
 
 # ---------------------------------------------------------------------------
 # DockerSandbox tests

@@ -20,7 +20,100 @@
 
 ---
 
+## ✅ Completado recientemente
+
+### SwiftUI UX — overlay completo P1–P8 (2026-05-20)
+
+**P1 — Hotkey ⌘⌥Space**
+- `HotkeyManager.swift` migrado de ⌘Space a ⌘⌥Space (keyCode 49 + maskCommand + maskAlternate).
+- Fallback `NSEvent` global monitor en ⌘⇧Space si CGEventTap falla (Accessibility denegada).
+- `_notifyTapFailed()` — `UNUserNotificationCenter` notifica al usuario una sola vez cuando el tap falla.
+- Eliminado toggle `useAltSpace`; el hotkey es único.
+
+**P2 — Colores semánticos en NotchView**
+- `AgentPhase` enum: `thinking` (azul) / `acting` (ámbar) / `completed` (verde) / `error` (rojo).
+- `NotchView` recibe `agentPhase`, `currentToolName`, `errorMessage`, `progressFraction`.
+- Barra de progreso bajo el notch visible solo durante `.acting`.
+- `JARVISState` añade `agentPhase`, `currentToolName`, `errorMessage`.
+
+**P3 — EdgeLogView con spring, timestamps y pin**
+- `isHovered || isPinned` controla la expansión del log lateral.
+- Animación `.interpolatingSpring(stiffness: 300, damping: 28)`.
+- `LogStep` tiene `timestamp: Date` y `elapsed` (ej: "hace 2s").
+- `StepRow` muestra `elapsed` alineado a la derecha.
+- Botón pin con ícono de chincheta; estado persiste mientras haya interacción.
+
+**P4 — FocusModalView con input inline e historial**
+- `replyText: String` con `TextField` para respuestas rápidas.
+- `ScrollView` con `MessageBubble` para el historial (`conversationHistory`).
+- Footer: modelo, tokens y coste USD.
+- Hint actualizado: "Esc · ⌘⌥Space para cerrar".
+
+**P5 — InlineView posición adaptativa y auto-dismiss**
+- `WindowManager` define `InlinePosition` y `appPositionPreferences` (11 apps).
+- `showInline(content:)` sin `point:` — posición derivada del bundle ID de la app activa.
+- Auto-dismiss a los 8 s sin interacción; timer se pausa en `.onHover`.
+- `TerminalChip` (esquina inf-izq, verde, monospaced) y `MailChip` (HStack con icono envelope) añadidos.
+
+**P6 — ConfirmationCard mejorada**
+- Colores adaptativos vía `@Environment(\.colorScheme)` (dark/light).
+- `affectedItems`: botón "Ver N elementos" con `ScrollView` deslizable (máx 20 + "… y N más").
+- Barra de expiración animada con `TimelineView(.animation)`, 60 s, rojo al quedar <20 %.
+- Botones destructivos: 3 vías — Cancelar / A la papelera / Eliminar definitivo.
+- `NSHapticFeedbackManager` en `.onAppear` y al confirmar.
+
+**P7 — Estado de error visible**
+- `WebSocketClient` expone `onLongDisconnect: (() -> Void)?` (disparado cuando delay >5 s).
+- `AppDelegate` conecta `onLongDisconnect` → `state.isDisconnected = true`.
+- `JARVISState.isDisconnected` activa banner de reconexión en `FocusModalView`.
+- `NotchView` muestra el `errorMessage` con ícono rojo cuando `agentPhase == .error`.
+
+**P8 — Onboarding de primera ejecución**
+- `OnboardingView.swift` (nuevo): 3 pasos, `VisualEffectBlur`, dots de progreso, animación spring.
+- Pasos: "Hola, soy JARVIS" / "⌘⌥Space para activarme" / "Siempre te pido permiso".
+- `UserDefaults` key `jarvis.onboardingCompleted` — se muestra solo la primera vez.
+- `AppDelegate._checkOnboarding()` lanzado en `applicationDidFinishLaunching`.
+
+**Python — ajustes complementarios**
+- `security/confirmation.py`: `ConfirmationRequest` añade `action_type`, `affected_items`, `affected_count`. `request_confirmation()` acepta y reenvía estos campos al overlay vía WebSocket.
+- `requirements.txt`: `send2trash>=1.8.0` añadido.
+
+**ADR-68** — `onLongDisconnect` como callback en lugar de lógica de UI en `WebSocketClient`:
+mantiene el cliente agnóstico del estado de SwiftUI y evita importar `SwiftUI` desde `Core/`.
+
+**ADR-69** — `TerminalChip` y `MailChip` como vistas privadas en `InlineView.swift` en lugar de
+ficheros separados: son variantes de presentación, no componentes reutilizables.
+
+**ADR-70** — `appPositionPreferences` como dict en `WindowManager` en lugar de lógica
+en `InlineView`: el posicionamiento es responsabilidad del sistema de ventanas, no de la vista.
+
+- **Suite Python: 464/464 verde + 1 skip (fastmcp no instalado).**
+- **Swift: SourceKit falsos positivos por análisis aislado de ficheros — se resuelven al compilar.**
+
+---
+
 ## ✅ Completado
+
+### Sesión de fixes — auditoría de seguridad y limpieza (2026-05-20)
+
+- **[CRÍTICO RESUELTO] Scoping de confirmaciones en WebSocket** — El handler WS usaba
+  `sid` (derivado del payload, manipulable por el cliente) al llamar `resolve()`.
+  Corregido: ahora usa siempre `session_id` del URL param de conexión (validado en el
+  handshake). Test `test_confirmation_websocket_uses_connection_session_id` verifica el
+  comportamiento.
+- **[POLICY] anthropic/openai movidos a extras dev** — `requirements.txt` de producción
+  ya no incluye ningún SDK de tercero que viole CLAUDE.md. Comentados con explicación.
+  `pyproject.toml` añade `[project.optional-dependencies] dev = [...]`.
+  `make install-dev` hace `pip install -e ".[dev]"`.
+- **[CLEANUP] requirements.txt sin duplicados** — `pytesseract`, `Pillow` y `pyautogui`
+  aparecían dos veces (sección OCR + sección Comunicaciones). Eliminados. Capitalización
+  normalizada a `Pillow` (nombre oficial PyPI).
+- **[DOCS] README y puertos corregidos** — `localhost:8080`/`8081` → `localhost:8765`
+  en todo el README. `.env.example` actualizado (`API_PORT=8765`, `WEBSOCKET_PORT`
+  eliminado con nota explicativa). STT y TTS marcados como `[planned]` en el diagrama.
+  OpenRouter añadido a la tabla de modelos. Sección "Estado actual" con enlace a
+  PROGRESS.md.
+- **Suite: 464/464 verde + 1 skip (fastmcp no instalado).**
 
 ### Máquina de estados + trazabilidad en core/agent.py (2026-05-19)
 - **`AgentFase` (StrEnum)** — 11 estados explícitos: `INIT → PERCEIVE → PLAN → WAIT_CONFIRMATION → EXECUTE_TOOL → VERIFY → REFLECT → REPLAN → DONE / ERROR / CANCELLED`.

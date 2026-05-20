@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _startHotkey()
         _startContextDetector()
         _showInitialState()
+        _checkOnboarding()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -36,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem?.button {
             button.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "JARVIS")
+            button.toolTip = "JARVIS · ⌘⌥Space para activar"
             button.action = #selector(_statusBarTapped)
             button.target = self
         }
@@ -64,6 +66,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         wsClient.onConnectionChange = { [weak self] connected in
             Task { @MainActor [weak self] in
                 self?.state.isConnected = connected
+            }
+        }
+        wsClient.onLongDisconnect = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.state.isDisconnected = true
             }
         }
         wsClient.connect(sessionId: state.sessionId)
@@ -101,9 +108,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func _showInitialState() {
         WindowManager.shared.showNotch(content:
-            NotchView(status: "Listo", model: "")
-                .environment(state)
+            NotchView(
+                status: "Listo",
+                model: "",
+                agentPhase: state.agentPhase,
+                currentToolName: state.currentToolName,
+                errorMessage: state.errorMessage,
+                progressFraction: 0.0
+            )
+            .environment(state)
         )
+    }
+
+    private func _checkOnboarding() {
+        guard !UserDefaults.standard.bool(forKey: "jarvis.onboardingCompleted") else { return }
+        WindowManager.shared.showOnboarding(content: OnboardingView())
     }
 
     // MARK: - Sincronización UI ↔ Estado
@@ -117,8 +136,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         case .notchPulse(let status, let model):
             WindowManager.shared.showNotch(content:
-                NotchView(status: status, model: model)
-                    .environment(state)
+                NotchView(
+                    status: status,
+                    model: model,
+                    agentPhase: state.agentPhase,
+                    currentToolName: state.currentToolName,
+                    errorMessage: state.errorMessage,
+                    progressFraction: state.currentProgress
+                )
+                .environment(state)
             )
 
         case .edgeLog(let steps):
@@ -130,8 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if state.focusModalShown { _showFocusModal() }
 
         case .inline(let app, let suggestion):
-            let ctx = AppContextDetector.shared.current
-            WindowManager.shared.showInline(at: ctx.cursorPosition, content:
+            WindowManager.shared.showInline(content:
                 InlineView(
                     app: app,
                     suggestion: suggestion,
