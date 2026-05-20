@@ -187,6 +187,14 @@ overlay: ## Compila y firma el overlay SwiftUI (lee APPLE_DEVELOPER_ID de .env).
 overlay-debug: ## Compila el overlay en modo debug (sin firma).
 	bash interface/swiftui/build.sh debug
 
+.PHONY: tui
+tui: ## Lanza el TUI como panel lateral derecho (abre ventana iTerm2/Terminal).
+	bash interface/tui/launch.sh
+
+.PHONY: tui-dev
+tui-dev: ## Lanza el TUI directamente en el terminal actual (sin posicionar ventana).
+	$(PY) -m interface.tui
+
 # ---------------------------------------------------------------------
 # Limpieza
 # ---------------------------------------------------------------------

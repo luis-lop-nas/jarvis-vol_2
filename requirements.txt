@@ -27,6 +27,7 @@ aiohttp>=3.10.0
 # --- Logging y CLI ---
 rich>=13.9.0
 typer>=0.13.0
+textual>=0.60.0
 
 # --- Automatización macOS ---
 pyautogui>=0.9.54
