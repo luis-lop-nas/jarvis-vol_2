@@ -425,7 +425,37 @@ Basadas en patrones de clawdcursor, Self-Operating Computer y el paper Screen2AX
 
 ## 🔄 En progreso
 
-_(nada activo)_
+### Goals de cierre de integración (2026-06-30)
+
+Goals G1–G8 definidos por el usuario. Estado:
+
+- ✅ **G3 — Reconexión WS con session_id correcto** — `WebSocketClient` guarda el `sessionId`
+  real y lo reusa en `_scheduleReconnect`; antes usaba el literal `"reconnect"` y perdía el
+  buffer (deque 50) y el scoping de confirmaciones. Commit `f56f7fe`.
+- ✅ **G4 — Sync de estado al reconectar (ADR-80)** — `_receiveLoop` ahora distingue
+  `type=="session_state"` (sonda `MessageTypeProbe`) y lo decodifica con `SessionStateMessage`;
+  antes solo decodificaba `AgentUpdate` y lo descartaba. `applySessionState()` reconstruye una
+  confirmación pendiente. Commit `f56f7fe`.
+- ✅ **G5 — Wiring de arranque** — `_seleccionar_modelo()` (Kimi→DeepSeek→OpenRouter→Ollama),
+  carga de skills, `ModelRouter` y health check ChromaDB v2/v1. Commit `28a62d9`. Suite 466 verde.
+- ✅ **G6 — Elementos afectados en ConfirmationCard** — el overlay descartaba el broadcast de
+  `ConfirmationManager` (`type=waiting` con `data`, que trae `confirmation_id` real y
+  `affected_items`). Nuevo `ConfirmationBroadcast` + `applyConfirmation()`. Commit `f56f7fe`.
+- ✅ **G7 — Auto-init de WhatsApp** — `ServidorComms(auto_init_whatsapp=True)` +
+  `_asegurar_whatsapp()` llama `WhatsApp.initialize_session()` bajo demanda. Test añadido.
+  Commit `f69d3a4`.
+- ✅ **G8 — Deadlock de auth bajo cancelación** — `AuthManager.authenticate()` resuelve el
+  future de forma síncrona en el `finally` (sin `async with self._lock`, cuyo await podía ser
+  interrumpido por `CancelledError` y colgar a los followers). Test de cancelación. Commit `f69d3a4`.
+- ⛔ **G1 — Humo e2e real** — BLOQUEADO por entorno. Validado el camino de arranque:
+  `_seleccionar_modelo()` ejercitado contra servicios vivos llega a los 4 proveedores con
+  llamadas reales y cae correctamente (Kimi 429, DeepSeek 402, OpenRouter 401, Ollama sin
+  modelo descargado / sin RAM). Falta: Docker arriba para ChromaDB + un modelo Ollama pequeño
+  descargado o creds cloud con saldo. Suite completa: 466 verde + 1 skip.
+- ⛔ **G2 — Build del overlay** — BLOQUEADO: solo hay Command Line Tools, no Xcode completo,
+  así que `xcodebuild` no puede correr. `swiftc -typecheck` confirma que todos los tipos
+  cross-file resuelven (los errores de SourceKit eran falsos positivos) y que los cambios de
+  G3/G4/G6 no introducen ninguna clase nueva de error respecto a HEAD.
 
 ---
 
