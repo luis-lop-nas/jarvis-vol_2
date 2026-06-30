@@ -44,6 +44,9 @@ RAM_APROXIMADA_GB: dict[str, float] = {
     "qwen3-coder:8b": 5.5,
     "qwen2.5-coder:7b": 5.0,
     "llama3.2": 2.5,
+    "llama3.2:1b": 1.3,
+    "qwen2.5:1.5b": 1.2,
+    "qwen2.5:0.5b": 0.6,
     "nomic-embed-text": 0.3,
 }
 

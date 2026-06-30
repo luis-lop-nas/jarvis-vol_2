@@ -447,11 +447,16 @@ Goals G1–G8 definidos por el usuario. Estado:
 - ✅ **G8 — Deadlock de auth bajo cancelación** — `AuthManager.authenticate()` resuelve el
   future de forma síncrona en el `finally` (sin `async with self._lock`, cuyo await podía ser
   interrumpido por `CancelledError` y colgar a los followers). Test de cancelación. Commit `f69d3a4`.
-- ⛔ **G1 — Humo e2e real** — BLOQUEADO por entorno. Validado el camino de arranque:
-  `_seleccionar_modelo()` ejercitado contra servicios vivos llega a los 4 proveedores con
-  llamadas reales y cae correctamente (Kimi 429, DeepSeek 402, OpenRouter 401, Ollama sin
-  modelo descargado / sin RAM). Falta: Docker arriba para ChromaDB + un modelo Ollama pequeño
-  descargado o creds cloud con saldo. Suite completa: 466 verde + 1 skip.
+- ✅ **G1 — Humo e2e real (demostrado)** — El `Agente` real corrió end-to-end por primera vez
+  fuera de los mocks: loop completo `pensando/plan → listo/done`, modelo real respondiendo,
+  MCP bus real, ChromaDB degradado (Docker apagado, manejado por ADR-33). Es el mismo code path
+  que usa el endpoint `/chat` vía `_run_agent_task`. Modelo usado: `qwen2.5:0.5b` (único que cabe
+  en la RAM libre actual ~1.6 GB; los cloud están fuera: Kimi 429, DeepSeek 402, OpenRouter 401).
+  `models/ollama_client.py`: añadidos modelos pequeños (`llama3.2:1b`, `qwen2.5:1.5b`,
+  `qwen2.5:0.5b`) a `RAM_APROXIMADA_GB` para que el fallback los considere.
+  **Pendiente para un chat de calidad (no bloqueante):** levantar Docker→ChromaDB y descargar un
+  modelo capaz (o restaurar creds cloud con saldo). La calidad de respuesta del 0.5b es baja por
+  tamaño, pero el pipeline quedó validado. Suite: 466 verde + 1 skip.
 - ⛔ **G2 — Build del overlay** — BLOQUEADO: solo hay Command Line Tools, no Xcode completo,
   así que `xcodebuild` no puede correr. `swiftc -typecheck` confirma que todos los tipos
   cross-file resuelven (los errores de SourceKit eran falsos positivos) y que los cambios de
