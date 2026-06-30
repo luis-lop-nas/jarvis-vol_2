@@ -447,16 +447,16 @@ Goals G1–G8 definidos por el usuario. Estado:
 - ✅ **G8 — Deadlock de auth bajo cancelación** — `AuthManager.authenticate()` resuelve el
   future de forma síncrona en el `finally` (sin `async with self._lock`, cuyo await podía ser
   interrumpido por `CancelledError` y colgar a los followers). Test de cancelación. Commit `f69d3a4`.
-- ✅ **G1 — Humo e2e real (demostrado)** — El `Agente` real corrió end-to-end por primera vez
-  fuera de los mocks: loop completo `pensando/plan → listo/done`, modelo real respondiendo,
-  MCP bus real, ChromaDB degradado (Docker apagado, manejado por ADR-33). Es el mismo code path
-  que usa el endpoint `/chat` vía `_run_agent_task`. Modelo usado: `qwen2.5:0.5b` (único que cabe
-  en la RAM libre actual ~1.6 GB; los cloud están fuera: Kimi 429, DeepSeek 402, OpenRouter 401).
-  `models/ollama_client.py`: añadidos modelos pequeños (`llama3.2:1b`, `qwen2.5:1.5b`,
-  `qwen2.5:0.5b`) a `RAM_APROXIMADA_GB` para que el fallback los considere.
-  **Pendiente para un chat de calidad (no bloqueante):** levantar Docker→ChromaDB y descargar un
-  modelo capaz (o restaurar creds cloud con saldo). La calidad de respuesta del 0.5b es baja por
-  tamaño, pero el pipeline quedó validado. Suite: 466 verde + 1 skip.
+- ✅ **G1 — Humo e2e real (DoD cumplido)** — Ejecutado un `/chat` de principio a fin contra la
+  app FastAPI **real** (no `Agente.run()` directo): `POST /chat` → `200 {status: started}`,
+  `GET /stream/{sid}` → stream SSE `thinking → done`, con `Agente` real, `Planner`/`Reflector`
+  reales, modelo real (`qwen2.5:0.5b`), MCP bus real y ChromaDB degradado (Docker apagado,
+  ADR-33). `main.py` importa sin errores y `_seleccionar_modelo()` recorre los 4 proveedores.
+  El sistema funcionó fuera de los mocks por primera vez. Modelo `qwen2.5:0.5b` (único que cabe
+  en ~1.6 GB libres; cloud fuera: Kimi 429, DeepSeek 402, OpenRouter 401).
+  `models/ollama_client.py`: añadidos modelos pequeños a `RAM_APROXIMADA_GB`.
+  **Pendiente (calidad, no bloqueante):** Docker→ChromaDB + un modelo capaz o creds cloud con
+  saldo. Suite: 466 verde + 1 skip.
 - ⛔ **G2 — Build del overlay** — BLOQUEADO: solo hay Command Line Tools, no Xcode completo,
   así que `xcodebuild` no puede correr. `swiftc -typecheck` confirma que todos los tipos
   cross-file resuelven (los errores de SourceKit eran falsos positivos) y que los cambios de
