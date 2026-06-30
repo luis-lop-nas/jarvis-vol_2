@@ -73,6 +73,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.state.isDisconnected = true
             }
         }
+        wsClient.onConfirmation = { [weak self] data in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.state.applyConfirmation(data)
+                self._syncWindowsToState()
+            }
+        }
+        wsClient.onSessionState = { [weak self] msg in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.state.applySessionState(msg)
+                self._syncWindowsToState()
+            }
+        }
         wsClient.connect(sessionId: state.sessionId)
     }
 

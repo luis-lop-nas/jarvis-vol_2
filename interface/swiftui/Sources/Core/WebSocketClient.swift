@@ -33,6 +33,76 @@ enum ClientMessage: Encodable {
     }
 }
 
+// MARK: - Mensaje de sincronización de estado (enviado al conectar/reconectar)
+
+/// Sonda mínima para distinguir el tipo de mensaje antes del decode completo.
+private struct MessageTypeProbe: Decodable {
+    let type: String
+}
+
+/// Estado de sesión que el backend envía al (re)conectar — ADR-80.
+/// No es un `AgentUpdate` (no trae `message`/`progress`/`state`), así que
+/// requiere su propia ruta de decodificación.
+struct SessionStateMessage: Decodable {
+    let sessionState: String
+    let currentStep: String?
+    let pendingConfirmation: PendingConfirmation?
+
+    struct PendingConfirmation: Decodable {
+        let requestId: String
+        let actionDescription: String
+        let command: String?
+        let riskLevel: String?
+        let requiresAuth: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case requestId = "request_id"
+            case actionDescription = "action_description"
+            case command
+            case riskLevel = "risk_level"
+            case requiresAuth = "requires_auth"
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case sessionState = "session_state"
+        case currentStep = "current_step"
+        case pendingConfirmation = "pending_confirmation"
+    }
+}
+
+// MARK: - Confirmación de acción (ConfirmationManager → ws_sender.broadcast)
+
+/// Broadcast de confirmación de una acción sensible (p.ej. borrar archivos).
+/// Llega como `{"type":"waiting","data":{...}}`; a diferencia del `waiting`
+/// del agente, trae el `confirmation_id` real (UUID) y la lista `affected_items`.
+struct ConfirmationBroadcast: Decodable {
+    let data: ConfirmationData
+
+    struct ConfirmationData: Decodable {
+        let confirmationId: String
+        let action: String
+        let command: String?
+        let actionType: String?
+        let riskLevel: String?
+        let requiresAuth: Bool?
+        let affectedItems: [String]?
+        let affectedCount: Int?
+        let expiresIn: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case confirmationId = "confirmation_id"
+            case action, command
+            case actionType = "action_type"
+            case riskLevel = "risk_level"
+            case requiresAuth = "requires_auth"
+            case affectedItems = "affected_items"
+            case affectedCount = "affected_count"
+            case expiresIn = "expires_in"
+        }
+    }
+}
+
 // MARK: - Cliente WebSocket
 
 @MainActor
@@ -43,10 +113,13 @@ final class WebSocketClient: NSObject, URLSessionWebSocketDelegate {
     private var reconnectDelay: TimeInterval = 1.0
     private let maxDelay: TimeInterval = 30.0
     private var isRunning = false
+    private var sessionId: String = ""   // sesión real, reusada al reconectar
 
     var onUpdate: ((AgentUpdate) -> Void)?
     var onConnectionChange: ((Bool) -> Void)?
     var onLongDisconnect: (() -> Void)?  // llamado cuando reconexión tarda >5s (P7c)
+    var onSessionState: ((SessionStateMessage) -> Void)?  // sync de estado al (re)conectar
+    var onConfirmation: ((ConfirmationBroadcast.ConfirmationData) -> Void)?  // acción sensible
 
     override init() {
         super.init()
@@ -57,6 +130,7 @@ final class WebSocketClient: NSObject, URLSessionWebSocketDelegate {
         guard !isRunning else { return }
         isRunning = true
         reconnectDelay = 1.0
+        self.sessionId = sessionId
         _connect(sessionId: sessionId)
     }
 
@@ -88,10 +162,20 @@ final class WebSocketClient: NSObject, URLSessionWebSocketDelegate {
             guard let self else { return }
             switch result {
             case .success(let msg):
-                if case .string(let text) = msg,
-                   let data = text.data(using: .utf8),
-                   let update = try? JSONDecoder().decode(AgentUpdate.self, from: data) {
-                    Task { @MainActor in self.onUpdate?(update) }
+                if case .string(let text) = msg, let data = text.data(using: .utf8) {
+                    let probe = try? JSONDecoder().decode(MessageTypeProbe.self, from: data)
+                    if probe?.type == "session_state",
+                       let state = try? JSONDecoder().decode(SessionStateMessage.self, from: data) {
+                        Task { @MainActor in self.onSessionState?(state) }
+                    } else if probe?.type == "waiting",
+                              let conf = try? JSONDecoder().decode(ConfirmationBroadcast.self, from: data) {
+                        // Confirmación de acción: trae `data` con confirmation_id real
+                        // y affected_items. El `waiting` del agente no tiene `data`,
+                        // así que cae a la rama AgentUpdate de abajo.
+                        Task { @MainActor in self.onConfirmation?(conf.data) }
+                    } else if let update = try? JSONDecoder().decode(AgentUpdate.self, from: data) {
+                        Task { @MainActor in self.onUpdate?(update) }
+                    }
                 }
                 self._receiveLoop()
             case .failure:
@@ -115,7 +199,9 @@ final class WebSocketClient: NSObject, URLSessionWebSocketDelegate {
         Task {
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             if self.isRunning {
-                self._connect(sessionId: "reconnect")
+                // Reusar la sesión real: usar un id distinto perdería el buffer
+                // de mensajes (deque maxlen=50) y el scoping de confirmaciones.
+                self._connect(sessionId: self.sessionId)
             }
         }
     }

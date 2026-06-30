@@ -296,6 +296,43 @@ final class JARVISState {
         conversationHistory.append(ChatMessage(role: .user, content: text))
     }
 
+    /// Confirmación de acción sensible (ConfirmationManager). Trae el
+    /// confirmation_id real y la lista de elementos afectados, que la tarjeta
+    /// muestra en "Ver N elementos". G6.
+    func applyConfirmation(_ data: ConfirmationBroadcast.ConfirmationData) {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            agentPhase = .thinking
+            pendingConfirmation = ConfirmationRequest(
+                id: data.confirmationId,
+                actionDescription: data.action,
+                command: data.command,
+                isDestructive: (data.riskLevel == "dangerous"),
+                actionType: data.actionType ?? "",
+                affectedItems: data.affectedItems,
+                affectedCount: data.affectedCount ?? (data.affectedItems?.count ?? 0)
+            )
+            focusModalShown = true
+        }
+    }
+
+    /// Estado de sesión enviado al (re)conectar (ADR-80). Si había una
+    /// confirmación pendiente, la reconstruye para que la tarjeta reaparezca. G4.
+    func applySessionState(_ msg: SessionStateMessage) {
+        guard let pc = msg.pendingConfirmation else { return }
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            pendingConfirmation = ConfirmationRequest(
+                id: pc.requestId,
+                actionDescription: pc.actionDescription,
+                command: pc.command,
+                isDestructive: (pc.riskLevel == "dangerous"),
+                actionType: "",
+                affectedItems: nil,
+                affectedCount: 0
+            )
+            focusModalShown = true
+        }
+    }
+
     func reset() {
         logSteps = []
         pendingConfirmation = nil
