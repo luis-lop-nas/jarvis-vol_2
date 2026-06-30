@@ -150,11 +150,27 @@ final class WebSocketClient: NSObject, URLSessionWebSocketDelegate {
     // MARK: Private
 
     private func _connect(sessionId: String) {
+        var items = [URLQueryItem(name: "session_id", value: sessionId)]
+        // El backend exige el token de API en /ws?token=...; sin él cierra
+        // la conexión con código 1008 antes de aceptarla. main.py lo escribe
+        // en ~/.jarvis/.api_token (0600).
+        if let token = Self._readApiToken() {
+            items.append(URLQueryItem(name: "token", value: token))
+        }
         var url = baseURL
-        url.append(queryItems: [URLQueryItem(name: "session_id", value: sessionId)])
+        url.append(queryItems: items)
         task = session.webSocketTask(with: url)
         task?.resume()
         _receiveLoop()
+    }
+
+    /// Lee el token de API escrito por el backend en ~/.jarvis/.api_token.
+    private static func _readApiToken() -> String? {
+        let path = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".jarvis/.api_token")
+        guard let raw = try? String(contentsOf: path, encoding: .utf8) else { return nil }
+        let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return token.isEmpty ? nil : token
     }
 
     private func _receiveLoop() {

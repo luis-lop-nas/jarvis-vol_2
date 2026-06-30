@@ -17,6 +17,7 @@
 		A108 /* FocusModalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F108 /* FocusModalView.swift */; };
 		A109 /* InlineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F109 /* InlineView.swift */; };
 		A110 /* ConfirmationCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = F110 /* ConfirmationCard.swift */; };
+		A115 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F115 /* OnboardingView.swift */; };
 		A111 /* WindowManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F111 /* WindowManager.swift */; };
 		A112 /* HotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F112 /* HotkeyManager.swift */; };
 		A113 /* AppContextDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = F113 /* AppContextDetector.swift */; };
@@ -34,6 +35,7 @@
 		F108 /* FocusModalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusModalView.swift; sourceTree = "<group>"; };
 		F109 /* InlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineView.swift; sourceTree = "<group>"; };
 		F110 /* ConfirmationCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfirmationCard.swift; sourceTree = "<group>"; };
+		F115 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		F111 /* WindowManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowManager.swift; sourceTree = "<group>"; };
 		F112 /* HotkeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyManager.swift; sourceTree = "<group>"; };
 		F113 /* AppContextDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppContextDetector.swift; sourceTree = "<group>"; };
@@ -101,6 +103,7 @@
 				F108 /* FocusModalView.swift */,
 				F109 /* InlineView.swift */,
 				F110 /* ConfirmationCard.swift */,
+				F115 /* OnboardingView.swift */,
 			);
 			name = Views;
 			path = Sources/Views;
@@ -205,6 +208,7 @@
 				A108 /* FocusModalView.swift in Sources */,
 				A109 /* InlineView.swift in Sources */,
 				A110 /* ConfirmationCard.swift in Sources */,
+				A115 /* OnboardingView.swift in Sources */,
 				A111 /* WindowManager.swift in Sources */,
 				A112 /* HotkeyManager.swift in Sources */,
 				A113 /* AppContextDetector.swift in Sources */,

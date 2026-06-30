@@ -47,3 +47,6 @@ logs/
 # Playwright
 playwright-report/
 test-results/
+
+# Xcode build artifacts del overlay
+interface/swiftui/.build/

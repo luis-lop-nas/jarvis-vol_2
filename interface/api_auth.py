@@ -6,10 +6,12 @@ Escríbelo a disco desde main.py si el overlay necesita leerlo.
 
 from __future__ import annotations
 
+import os
 import re
 import secrets
 import time
 from collections import defaultdict, deque
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import Header, HTTPException
@@ -33,6 +35,33 @@ def get_api_token() -> str:
         # main.py lo escribe a ~/.jarvis/.api_token (0600) para el overlay
     """
     return _API_TOKEN
+
+
+def token_file_path() -> Path:
+    """Ruta del fichero de token que lee el overlay SwiftUI.
+
+    Ejemplo::
+        ruta = token_file_path()  # ~/.jarvis/.api_token
+    """
+    return Path.home() / ".jarvis" / ".api_token"
+
+
+def write_api_token(path: Path | None = None) -> Path:
+    """Escribe el token a ``~/.jarvis/.api_token`` con permisos 0600.
+
+    El overlay SwiftUI lee este fichero para autenticarse en el WebSocket
+    (``/ws?token=...``) y en los endpoints REST. Escritura atómica con
+    ``O_TRUNC`` y permisos restrictivos para que ningún otro usuario lo lea.
+
+    Ejemplo::
+        ruta = write_api_token()  # devuelve la ruta escrita
+    """
+    destino = path or token_file_path()
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(destino), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fichero:
+        fichero.write(_API_TOKEN)
+    return destino
 
 
 def check_ip_rate(ip: str) -> bool:

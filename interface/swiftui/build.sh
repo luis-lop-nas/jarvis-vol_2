@@ -58,18 +58,40 @@ if [ ! -d "$SCRIPT_DIR/JARVIS.xcodeproj" ]; then
     exit 1
 fi
 
-# Compilar
-xcodebuild \
-    -project "$SCRIPT_DIR/JARVIS.xcodeproj" \
-    -scheme "$SCHEME" \
-    -configuration "$CONFIGURATION_CAP" \
-    -derivedDataPath "$SCRIPT_DIR/.build" \
-    clean build \
-    DEVELOPMENT_TEAM="" \
-    CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY" \
-    CODE_SIGNING_REQUIRED="$CODE_SIGNING_REQUIRED" \
-    CODE_SIGNING_ALLOWED="$CODE_SIGNING_ALLOWED" \
-    | xcpretty 2>/dev/null || cat
+# Compilar. Nota: con `| xcpretty` el exit code de xcodebuild se perdía y el
+# script reportaba éxito aunque el build fallara. Usamos PIPESTATUS para abortar
+# si la compilación falla de verdad.
+if command -v xcpretty >/dev/null 2>&1; then
+    xcodebuild \
+        -project "$SCRIPT_DIR/JARVIS.xcodeproj" \
+        -scheme "$SCHEME" \
+        -configuration "$CONFIGURATION_CAP" \
+        -derivedDataPath "$SCRIPT_DIR/.build" \
+        clean build \
+        DEVELOPMENT_TEAM="" \
+        CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY" \
+        CODE_SIGNING_REQUIRED="$CODE_SIGNING_REQUIRED" \
+        CODE_SIGNING_ALLOWED="$CODE_SIGNING_ALLOWED" \
+        | xcpretty
+    BUILD_STATUS=${PIPESTATUS[0]}
+else
+    xcodebuild \
+        -project "$SCRIPT_DIR/JARVIS.xcodeproj" \
+        -scheme "$SCHEME" \
+        -configuration "$CONFIGURATION_CAP" \
+        -derivedDataPath "$SCRIPT_DIR/.build" \
+        clean build \
+        DEVELOPMENT_TEAM="" \
+        CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY" \
+        CODE_SIGNING_REQUIRED="$CODE_SIGNING_REQUIRED" \
+        CODE_SIGNING_ALLOWED="$CODE_SIGNING_ALLOWED"
+    BUILD_STATUS=$?
+fi
+
+if [ "$BUILD_STATUS" -ne 0 ]; then
+    echo "✗ La compilación falló (xcodebuild exit ${BUILD_STATUS})."
+    exit "$BUILD_STATUS"
+fi
 
 # Localizar el .app compilado
 APP_PATH=$(find "$SCRIPT_DIR/.build" -name "JARVIS.app" -type d | head -1)

@@ -457,10 +457,22 @@ Goals G1–G8 definidos por el usuario. Estado:
   `models/ollama_client.py`: añadidos modelos pequeños a `RAM_APROXIMADA_GB`.
   **Pendiente (calidad, no bloqueante):** Docker→ChromaDB + un modelo capaz o creds cloud con
   saldo. Suite: 466 verde + 1 skip.
-- ⛔ **G2 — Build del overlay** — BLOQUEADO: solo hay Command Line Tools, no Xcode completo,
-  así que `xcodebuild` no puede correr. `swiftc -typecheck` confirma que todos los tipos
-  cross-file resuelven (los errores de SourceKit eran falsos positivos) y que los cambios de
-  G3/G4/G6 no introducen ninguna clase nueva de error respecto a HEAD.
+- ✅ **G2 — Build del overlay (DoD cumplido)** — Con Xcode 26.6 instalado, `make overlay-debug`
+  da **BUILD SUCCEEDED** y genera `JARVIS.app` (binario real instalado en `~/Applications/`).
+  El overlay **lanza y conecta al backend por WebSocket autenticado** (TCP ESTABLISHED
+  bidireccional + `manager.connect()` confirmado en el log). Se descubrió que **el build nunca
+  había funcionado** (los "falsos positivos de SourceKit" del PROGRESS eran errores reales de
+  Swift 6). Bugs corregidos:
+  - **Aislamiento de actor**: `AppDelegate` ahora `@MainActor` (toca `JARVISState`/`WebSocketClient`
+    desde el hilo principal; Swift 6 lo exige).
+  - **`OnboardingView.swift` ausente del `project.pbxproj`** (añadido en P8 pero nunca registrado
+    en el target) → añadido a las 4 secciones (`A115`/`F115`).
+  - **`build.sh` reportaba éxito aunque el build fallara** (`| xcpretty` se tragaba el exit code)
+    → ahora usa `PIPESTATUS` y aborta si falla.
+  - **El overlay nunca enviaba el token de API** en `/ws?token=...` (el backend cierra con 1008
+    sin él) **y `main.py` nunca escribía el token a disco**. Añadido `write_api_token()`
+    (`~/.jarvis/.api_token`, 0600), llamado en `main.py`, y lectura del token en
+    `WebSocketClient._connect`. El canal overlay↔backend funciona por primera vez.
 
 ---
 

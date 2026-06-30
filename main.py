@@ -261,6 +261,13 @@ async def main() -> None:
     configurar_logging(settings.log_level)
 
     async with _construir_stack() as (agente, manager, router, skill_registry):
+        # Escribe el token a ~/.jarvis/.api_token (0600) para que el overlay
+        # SwiftUI pueda autenticarse en el WebSocket y los endpoints REST.
+        from interface.api_auth import write_api_token
+
+        ruta_token = write_api_token()
+        log.info("Token de API escrito en %s para el overlay", ruta_token)
+
         app = crear_servidor(
             agente,
             manager,

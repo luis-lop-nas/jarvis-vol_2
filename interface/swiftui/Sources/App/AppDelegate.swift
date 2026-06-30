@@ -4,6 +4,7 @@ import SwiftUI
 // MARK: - AppDelegate
 // Configura el overlay, permisos y arranque al inicio.
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     let state = JARVISState()
