@@ -58,6 +58,30 @@ async def test_comms_whatsapp_not_configured() -> None:
 
 
 @pytest.mark.asyncio
+async def test_comms_whatsapp_auto_init_session(monkeypatch) -> None:
+    """Con auto_init_whatsapp=True el servidor crea la sesión vía initialize_session()."""
+    fake = FakeWhatsApp()
+    creado = {"n": 0}
+
+    async def fake_initialize_session(**kwargs):
+        creado["n"] += 1
+        return fake
+
+    monkeypatch.setattr(
+        "mcp_servers.server_comms.WhatsApp.initialize_session",
+        fake_initialize_session,
+    )
+    servidor = ServidorComms(mail=object(), imessage=object(), auto_init_whatsapp=True)
+
+    resultado = await servidor.ejecutar("whatsapp.leer", {"contacto": "Pep"})
+    # Segunda llamada reutiliza la sesión: initialize_session solo una vez.
+    await servidor.ejecutar("whatsapp.leer", {"contacto": "Pep"})
+
+    assert resultado[0]["texto"] == "hola Pep"
+    assert creado["n"] == 1
+
+
+@pytest.mark.asyncio
 async def test_comms_whatsapp_read_injected_session() -> None:
     """WhatsApp lee mensajes cuando se inyecta una sesión configurada."""
     servidor = ServidorComms(mail=object(), imessage=object(), whatsapp=FakeWhatsApp())

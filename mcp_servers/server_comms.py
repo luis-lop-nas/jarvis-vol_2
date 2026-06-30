@@ -22,11 +22,35 @@ class ServidorComms:
         imessage: IMessage | None = None,
         telegram: Telegram | None = None,
         whatsapp: WhatsApp | None = None,
+        *,
+        auto_init_whatsapp: bool = False,
     ) -> None:
         self._mail = mail or Mail()
         self._imessage = imessage or IMessage()
         self._telegram = telegram
         self._whatsapp = whatsapp
+        # Si está activo, el servidor crea la sesión de WhatsApp bajo demanda con
+        # WhatsApp.initialize_session() (Chromium persistente + QR) en lugar de
+        # exigir una sesión inyectada. Útil en producción; los tests inyectan un
+        # doble y dejan auto_init_whatsapp=False para no lanzar Playwright.
+        self._auto_init_whatsapp = auto_init_whatsapp
+
+    async def _asegurar_whatsapp(self) -> WhatsApp:
+        """Devuelve la sesión de WhatsApp, inicializándola si procede.
+
+        Si ya hay sesión (inyectada o creada antes) la reutiliza. Si no la hay y
+        ``auto_init_whatsapp`` está activo, llama a ``WhatsApp.initialize_session()``.
+        En cualquier otro caso falla de forma explícita.
+
+        Ejemplo::
+            wa = await servidor._asegurar_whatsapp()
+        """
+        if self._whatsapp is not None:
+            return self._whatsapp
+        if not self._auto_init_whatsapp:
+            raise RuntimeError("WhatsApp no configurado")
+        self._whatsapp = await WhatsApp.initialize_session()
+        return self._whatsapp
 
     def herramientas(self) -> list[MCPTool]:
         """Declara herramientas de comunicación compatibles con el planner."""
@@ -184,22 +208,20 @@ class ServidorComms:
                     parse_mode=str(params.get("parse_mode", "MarkdownV2")),
                 )
             case "whatsapp.leer":
-                if self._whatsapp is None:
-                    raise RuntimeError("WhatsApp no configurado")
+                whatsapp = await self._asegurar_whatsapp()
                 contacto = params.get("contacto") or params.get("nombre_chat")
                 if contacto is not None:
                     return serializar_dato(
-                        await self._whatsapp.obtener_mensajes(
+                        await whatsapp.obtener_mensajes(
                             str(contacto),
                             limite=int(params.get("limite", 20)),
                         )
                     )
-                return serializar_dato(await self._whatsapp.obtener_chats_no_leidos())
+                return serializar_dato(await whatsapp.obtener_chats_no_leidos())
             case "whatsapp.enviar":
-                if self._whatsapp is None:
-                    raise RuntimeError("WhatsApp no configurado")
+                whatsapp = await self._asegurar_whatsapp()
                 contacto = params.get("contacto") or params["nombre_chat"]
                 texto = params.get("texto") or params["mensaje"]
-                return await self._whatsapp.enviar_mensaje(str(contacto), str(texto))
+                return await whatsapp.enviar_mensaje(str(contacto), str(texto))
             case _:
                 raise ValueError(f"Herramienta comms desconocida: {tool_name}")

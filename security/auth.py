@@ -97,13 +97,17 @@ class AuthManager:
         except Exception as exc:
             result = AuthResult(success=False, method="failed", reason=reason, error=str(exc))
         finally:
-            # Siempre resolver el future y limpiar, incluso si hay CancelledError
-            async with self._lock:
-                if self._in_flight is not None and not self._in_flight.done():
-                    self._in_flight.set_result(result)
-                self._in_flight = None
-                if result.success:
-                    self._last_auth = result
+            # Resolver el future de forma SÍNCRONA, sin volver a adquirir el lock.
+            # Un `async with self._lock` aquí introduce un punto de await que un
+            # CancelledError (cancelación del diálogo Face ID) puede interrumpir,
+            # dejando a los followers (asyncio.shield) colgados indefinidamente.
+            # asyncio es cooperativo y single-thread: estas mutaciones son atómicas
+            # entre puntos de await, así que no necesitan el lock para ser seguras.
+            if self._in_flight is not None and not self._in_flight.done():
+                self._in_flight.set_result(result)
+            self._in_flight = None
+            if result.success:
+                self._last_auth = result
 
         return result
 

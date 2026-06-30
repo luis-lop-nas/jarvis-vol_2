@@ -7,13 +7,14 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from security.audit_log import AuditLog, AuditStats
-from security.auth import AuthError, AuthManager
+from security.auth import AuthError, AuthManager, AuthResult
 from security.confirmation import ConfirmationError, ConfirmationManager, SecurityError
 from security.docker_sandbox import DockerSandbox, DockerSandboxError
 from security.permissions import Permission, PermissionsManager
@@ -121,6 +122,40 @@ class TestAuthManager:
         assert result2.success is True
         # evaluatePolicy solo se llamó UNA vez (la segunda usó caché)
         assert ctx.evaluatePolicy_localizedReason_reply_.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_auth_leader_cancelled_does_not_hang_followers(self):
+        """Si el líder Face ID es cancelado durante to_thread, el follower no se cuelga.
+
+        Regresión G8: el finally resuelve el future de forma síncrona, así que
+        un CancelledError en el líder no deja a los followers (asyncio.shield)
+        esperando indefinidamente.
+        """
+        started = threading.Event()
+        release = threading.Event()
+
+        def blocking_sync(reason: str) -> AuthResult:
+            started.set()
+            release.wait(timeout=5.0)  # mantiene al líder dentro de to_thread
+            return AuthResult(success=True, method="face_id", reason=reason)
+
+        auth = AuthManager()
+        with patch.object(auth, "_authenticate_sync", blocking_sync):
+            leader = asyncio.create_task(auth.authenticate("líder"))
+            await asyncio.to_thread(started.wait, 2.0)  # líder ya en to_thread
+            follower = asyncio.create_task(auth.authenticate("follower"))
+            await asyncio.sleep(0.05)  # follower se suscribe al in_flight
+
+            leader.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await leader
+
+            # El follower debe resolverse sin colgarse pese a la cancelación.
+            result = await asyncio.wait_for(follower, timeout=1.0)
+            release.set()
+
+        assert result.success is False        # líder cancelado → resultado fallido
+        assert auth._in_flight is None         # estado limpiado
 
     @pytest.mark.asyncio
     async def test_auth_biometrics_unavailable_fallback_password(self):
