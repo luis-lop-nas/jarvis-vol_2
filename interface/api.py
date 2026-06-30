@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from security.auth import AuthManager
     from security.confirmation import ConfirmationManager
 
+from config import settings
 from core.agent import ActualizacionAgente, Agente
 from interface.api_auth import SESSION_ID_RE, check_ip_rate, require_auth
 from interface.api_models import (
@@ -343,9 +344,14 @@ def crear_servidor(
     async def status_check() -> SystemStatus:
         chroma_ok = False
         try:
+            base = f"http://{settings.chroma_host}:{settings.chroma_port}"
             async with httpx.AsyncClient(timeout=2.0) as c:
-                r = await c.get("http://localhost:8000/api/v1/heartbeat")
-                chroma_ok = r.status_code == 200
+                # ChromaDB >=1.0 expone /api/v2; versiones antiguas /api/v1.
+                for ruta in ("/api/v2/heartbeat", "/api/v1/heartbeat"):
+                    r = await c.get(f"{base}{ruta}")
+                    if r.status_code == 200:
+                        chroma_ok = True
+                        break
         except Exception:
             pass
 

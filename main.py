@@ -31,13 +31,20 @@ from core.agent import Agente
 from core.mcp_bus import MCPBus
 from core.planner import Planner
 from core.reflector import Reflector
+from core.router import ModelRouter
 from interface.api import crear_servidor
 from interface.websocket import ConnectionManager
 from mcp_servers import crear_bus_mcp
 from memory import MemorySystem
 from memory.episodic import MemoriaEpisodica
 from memory.short_term import MemoriaCortoPlazo
+from models.base import BaseModel as _ModelBase
+from models.base import Mensaje
+from models.deepseek import DeepSeekModel
+from models.kimi import KimiModel
 from models.ollama_client import OllamaModel
+from models.openrouter import OpenRouterModel
+from skills.registry import SkillRegistry
 from security.audit_log import AuditLog
 from security.auth import AuthManager
 from security.confirmation import ConfirmationManager
@@ -91,13 +98,54 @@ async def _verificar_ollama() -> bool:
 
 
 async def _verificar_chroma() -> bool:
-    url = f"http://{settings.chroma_host}:{settings.chroma_port}/api/v1/heartbeat"
+    base = f"http://{settings.chroma_host}:{settings.chroma_port}"
     try:
         async with httpx.AsyncClient(timeout=3.0) as c:
-            r = await c.get(url)
-            return r.status_code == 200
+            # ChromaDB >=1.0 expone /api/v2; versiones antiguas /api/v1.
+            for ruta in ("/api/v2/heartbeat", "/api/v1/heartbeat"):
+                r = await c.get(f"{base}{ruta}")
+                if r.status_code == 200:
+                    return True
     except Exception:
         return False
+    return False
+
+
+async def _seleccionar_modelo() -> _ModelBase:
+    """Devuelve el primer modelo LLM que responde a una petición mínima.
+
+    Orden de preferencia: Kimi (gratis) → DeepSeek → OpenRouter → Ollama local.
+    Si ninguno responde, devuelve ``OllamaModel`` como último recurso para no
+    abortar el arranque (modo degradado: el agente fallará al planificar pero el
+    resto del sistema queda operativo).
+
+    Ejemplo::
+        modelo = await _seleccionar_modelo()
+    """
+    candidatos: list[tuple[str, type[_ModelBase]]] = [
+        ("Kimi", KimiModel),
+        ("DeepSeek", DeepSeekModel),
+        ("OpenRouter", OpenRouterModel),
+        ("Ollama", OllamaModel),
+    ]
+    sonda = [Mensaje(rol="user", contenido="OK")]
+    for nombre, cls in candidatos:
+        try:
+            modelo = cls()
+        except Exception as exc:
+            log.warning("Modelo %s no instanciable: %s", nombre, str(exc)[:120])
+            continue
+        try:
+            await modelo.complete(sonda, temperatura=0.0, max_tokens=4)
+            console.print(f"[bold green]Modelo de razonamiento activo: {nombre}[/]")
+            return modelo
+        except Exception as exc:
+            log.warning("Modelo %s no disponible: %s", nombre, str(exc)[:120])
+    console.print(
+        "[yellow]Ningún modelo LLM respondió; Ollama en modo degradado. "
+        "Revisa credenciales cloud o instala un modelo local.[/]"
+    )
+    return OllamaModel()
 
 
 def _log_estado_arranque(
@@ -132,7 +180,9 @@ def _log_estado_arranque(
 
 
 @asynccontextmanager
-async def _construir_stack() -> AsyncIterator[tuple[Agente, ConnectionManager]]:
+async def _construir_stack() -> AsyncIterator[
+    tuple[Agente, ConnectionManager, ModelRouter, SkillRegistry]
+]:
     settings.asegurar_directorios()
 
     # --- Seguridad --- inicializar antes de cualquier otra cosa
@@ -167,22 +217,36 @@ async def _construir_stack() -> AsyncIterator[tuple[Agente, ConnectionManager]]:
     )
     _log_estado_arranque(permisos, ollama_ok, chroma_ok)
 
+    # --- Skills modulares (browser, files, email, terminal, calendar) ---
+    skill_registry = SkillRegistry()
+    try:
+        await skill_registry.cargar_directorio()
+        try:
+            skill_registry.registrar_en_permission_manager(security.permission_manager)
+        except Exception as exc:
+            log.warning("No se pudieron registrar skills en PermissionManager: %s", exc)
+        log.info("Skills cargados: %d", len(skill_registry.listar()))
+    except Exception as exc:
+        log.warning("No se pudieron cargar skills: %s", exc)
+
     memoria = MemorySystem()
     mcp_bus: MCPBus = crear_bus_mcp()
-    modelo = OllamaModel()
+    router = ModelRouter()
+    modelo = await _seleccionar_modelo()
 
     agente = Agente(
-        planner=Planner(modelo),
+        planner=Planner(modelo, skill_registry=skill_registry),
         reflector=Reflector(modelo),
         memoria_corto=MemoriaCortoPlazo(),
         memoria_episodica=MemoriaEpisodica(),
         auditoria=audit,
         memoria=memoria,
         mcp_bus=mcp_bus,
+        skill_registry=skill_registry,
     )
 
     try:
-        yield agente, manager
+        yield agente, manager, router, skill_registry
     finally:
         log.info("Cerrando JARVIS…")
         await audit.stop()
@@ -196,12 +260,14 @@ async def _construir_stack() -> AsyncIterator[tuple[Agente, ConnectionManager]]:
 async def main() -> None:
     configurar_logging(settings.log_level)
 
-    async with _construir_stack() as (agente, manager):
+    async with _construir_stack() as (agente, manager, router, skill_registry):
         app = crear_servidor(
             agente,
             manager,
             confirmation_manager=security.confirmation_manager,
             audit_log=security.audit_log,
+            router=router,
+            skill_registry=skill_registry,
         )
 
         config = uvicorn.Config(
