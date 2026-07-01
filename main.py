@@ -124,6 +124,26 @@ async def _verificar_chroma() -> bool:
     return False
 
 
+async def _confirmacion_via_agente(descripcion: str) -> bool:
+    """Concede la confirmación a nivel MCP porque el agente es el gate único.
+
+    Decisión de diseño (2026-07-01): la confirmación de acciones sensibles se
+    hace UNA sola vez, en el loop del agente (``AgentFase.WAIT_CONFIRMATION``),
+    ligada a la sesión vía ``resume()``/``cancel()`` con lock por sesión. El
+    agente solo invoca una herramienta confirmable DESPUÉS de que el usuario la
+    apruebe en el overlay; cuando el bus MCP pide confirmar, esa aprobación ya
+    ocurrió. Devolver ``True`` aquí evita un segundo prompt sin abrir hueco: los
+    tools confirmables (``_HERRAMIENTAS_CONFIRMACION``) siempre pasan antes por
+    el gate del agente (forzado en ``_normalizar_confirmaciones``). Sin este
+    callback, todo tool que exige confirmación a nivel MCP fallaba fail-closed.
+
+    Ejemplo::
+        bus = crear_bus_mcp(callback_confirmacion=_confirmacion_via_agente)
+    """
+    log.debug("Confirmación MCP concedida (gate del agente ya aprobó): %s", descripcion)
+    return True
+
+
 async def _seleccionar_modelo() -> _ModelBase:
     """Devuelve el primer modelo LLM que responde a una petición mínima.
 
@@ -258,7 +278,12 @@ async def _construir_stack() -> AsyncIterator[
         log.warning("No se pudieron cargar skills: %s", exc)
 
     memoria = MemorySystem()
-    mcp_bus: MCPBus = crear_bus_mcp()
+    # El agente es el gate único de confirmación (ver _confirmacion_via_agente).
+    # Sin este callback, los tools confirmables a nivel MCP fallan fail-closed.
+    mcp_bus: MCPBus = crear_bus_mcp(
+        callback_confirmacion=_confirmacion_via_agente,
+        audit_log=audit,
+    )
     router = ModelRouter()
     # Enrutado per-request con fallback en caliente (Goal 4): Planner/Reflector
     # reciben un RoutedModel que elige modelo por petición y escala la cadena de

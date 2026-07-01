@@ -103,7 +103,16 @@ class ControlSafari:
         Ejemplo::
             await safari.abrir_url("https://github.com")
         """
-        script = f'tell application "Safari" to set URL of current tab of front window to "{_escapar(url)}"'
+        # Robustez: si Safari no está abierto o no tiene ventana frontal, el
+        # `current tab of front window` falla. Activamos y creamos un documento
+        # cuando no hay ninguna ventana antes de fijar la URL.
+        script = (
+            'tell application "Safari"\n'
+            '  activate\n'
+            '  if (count of windows) = 0 then make new document\n'
+            f'  set URL of current tab of front window to "{_escapar(url)}"\n'
+            'end tell'
+        )
         return await self._s.ejecutar_applescript(script) is not None
 
     async def nueva_pestana(self, url: str = "") -> bool:
@@ -239,6 +248,10 @@ class Navegador:
         self._playwright = None
         self._browser = None
         self._context = None
+        # Página persistente entre llamadas: `obtener_contenido_pagina` la deja
+        # viva para que las herramientas interactivas (js/click/fill) operen
+        # sobre la misma pestaña sin recibir el objeto página por parámetro.
+        self._pagina_actual: Any = None
 
     async def __aenter__(self) -> Self:
         await self.iniciar()
@@ -263,6 +276,19 @@ class Navegador:
         self._browser = await self._playwright.chromium.launch(headless=self._headless)
         self._context = await self._browser.new_context()
 
+    async def asegurar_iniciado(self) -> None:
+        """Arranca el navegador si aún no lo está (idempotente).
+
+        Pensado para instancias de larga vida (servidor MCP) que no usan el
+        gestor de contexto ``async with``: la primera herramienta de navegador
+        arranca Playwright y las siguientes reutilizan el mismo contexto.
+
+        Ejemplo::
+            await nav.asegurar_iniciado()
+        """
+        if self._context is None:
+            await self.iniciar()
+
     async def cerrar(self) -> None:
         """Cierra el navegador y libera recursos.
 
@@ -284,15 +310,29 @@ class Navegador:
             print(res.texto[:200])
         """
         await self._audit_log("navegar", {"url": url})
-        pagina = await self._nueva_pagina()
-        try:
-            await pagina.goto(url, wait_until="domcontentloaded", timeout=30000)
-            titulo = await pagina.title()
-            texto = await pagina.inner_text("body")
-            html = await pagina.content() if incluir_html else None
-            return ResultadoExtraccion(url=pagina.url, titulo=titulo, texto=texto, html=html)
-        finally:
-            await pagina.close()
+        # Usa la página persistente (no la cierra) para que js/click/fill puedan
+        # operar después sobre la misma pestaña.
+        pagina = await self._pagina_persistente()
+        await pagina.goto(url, wait_until="domcontentloaded", timeout=30000)
+        titulo = await pagina.title()
+        texto = await pagina.inner_text("body")
+        html = await pagina.content() if incluir_html else None
+        return ResultadoExtraccion(url=pagina.url, titulo=titulo, texto=texto, html=html)
+
+    async def _pagina_persistente(self) -> Any:
+        """Devuelve una página reutilizable, creándola si no existe o se cerró.
+
+        A diferencia de ``_nueva_pagina`` (que exige iniciar y crea una pestaña
+        de usar y tirar), esta arranca el navegador perezosamente y mantiene una
+        única pestaña viva en ``_pagina_actual`` para las herramientas interactivas.
+
+        Ejemplo::
+            pagina = await nav._pagina_persistente()
+        """
+        await self.asegurar_iniciado()
+        if self._pagina_actual is None or self._pagina_actual.is_closed():
+            self._pagina_actual = await self._context.new_page()
+        return self._pagina_actual
 
     async def obtener_texto_pagina(self, url: str) -> str:
         """Devuelve solo el texto visible de una página.
@@ -309,6 +349,7 @@ class Navegador:
         Ejemplo::
             await nav.click_elemento("#submit-btn")
         """
+        pagina = pagina or self._pagina_actual
         if pagina is None:
             return False
         try:
@@ -317,12 +358,15 @@ class Navegador:
         except Exception:
             return False
 
-    async def rellenar_campo(self, selector: str, valor: str, *, pagina: Any) -> bool:
+    async def rellenar_campo(self, selector: str, valor: str, *, pagina: Any = None) -> bool:
         """Rellena un campo de formulario.
 
         Ejemplo::
             await nav.rellenar_campo("#email", "user@example.com", pagina=p)
         """
+        pagina = pagina or self._pagina_actual
+        if pagina is None:
+            return False
         try:
             await pagina.fill(selector, valor)
             return True
@@ -361,7 +405,7 @@ class Navegador:
         except Exception:
             return False
 
-    async def ejecutar_js(self, codigo: str, *, pagina: Any) -> Any:
+    async def ejecutar_js(self, codigo: str, *, pagina: Any = None) -> Any:
         """Ejecuta JavaScript en el contexto de la página.
 
         SEGURIDAD: nunca pasar código no validado sin confirmación.
@@ -372,6 +416,9 @@ class Navegador:
         aprobado = await self._confirmar(f"Ejecutar JS: {codigo[:100]}")
         if not aprobado:
             raise PermissionError("Ejecución de JavaScript no confirmada")
+        pagina = pagina or self._pagina_actual
+        if pagina is None:
+            raise RuntimeError("No hay página activa; abre una URL antes de ejecutar JS.")
         return await pagina.evaluate(codigo)
 
     async def descargar_archivo(self, url: str, destino: Path) -> Path | None:
@@ -405,12 +452,15 @@ class Navegador:
         except Exception:
             return None
 
-    async def captura_pagina(self, *, pagina: Any) -> bytes:
+    async def captura_pagina(self, *, pagina: Any = None) -> bytes:
         """Toma una captura de pantalla de la página completa.
 
         Ejemplo::
             png = await nav.captura_pagina(pagina=p)
         """
+        pagina = pagina or self._pagina_actual
+        if pagina is None:
+            raise RuntimeError("No hay página activa; abre una URL antes de capturar.")
         return await pagina.screenshot(full_page=True)
 
     async def _nueva_pagina(self) -> Any:

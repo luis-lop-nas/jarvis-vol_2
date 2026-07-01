@@ -18,8 +18,14 @@ class ServidorNavegador:
         self,
         navegador: Navegador | None = None,
         safari: ControlSafari | None = None,
+        *,
+        callback_confirmacion: Any | None = None,
+        audit_log: Any | None = None,
     ) -> None:
-        self._navegador = navegador or Navegador()
+        self._navegador = navegador or Navegador(
+            callback_confirmacion=callback_confirmacion,
+            audit_log=audit_log,
+        )
         self._safari = safari or ControlSafari()
 
     def herramientas(self) -> list[MCPTool]:
@@ -92,6 +98,10 @@ class ServidorNavegador:
         Returns:
             Resultado serializable de navegador.
         """
+        # El Navegador (Playwright) es de larga vida y no usa `async with`:
+        # arráncalo perezosamente en la primera herramienta que lo necesite.
+        await self._navegador.asegurar_iniciado()
+
         match tool_name:
             case "browser.abrir" | "browser.leer":
                 if tool_name == "browser.abrir":

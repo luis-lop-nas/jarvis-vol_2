@@ -650,7 +650,9 @@ class TestCostesModelos:
         model = OllamaModel(cliente=cliente)
         model._inicializado = True
         model._modelo_cargado = "gemma4:4b"
-        resp = await model.complete([Mensaje(rol="user", contenido="test")])
+        # Pedir el mismo modelo ya "cargado" → early-return en _preparar_modelo,
+        # sin depender de la RAM real del host (el test valida el coste, no la carga).
+        resp = await model.complete([Mensaje(rol="user", contenido="test")], modelo="gemma4:4b")
         # duracion_ms / 1000 * ollama_cost_per_second
         esperado = (resp.duration_ms / 1000.0) * cfg.ollama_cost_per_second
         assert resp.cost_usd == pytest.approx(esperado, rel=1e-3)

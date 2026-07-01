@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from mcp_servers.base import MCPRequest, MCPResult, MCPTool
+from mcp_servers.server_browser import ServidorNavegador
 from mcp_servers.server_code import ServidorCodigo
 from mcp_servers.server_comms import ServidorComms
 from mcp_servers.server_filesystem import ServidorFilesystem
@@ -26,6 +27,7 @@ __all__ = [
     "ServidorCodigo",
     "ServidorComms",
     "ServidorFilesystem",
+    "ServidorNavegador",
     "ServidorInput",
     "ServidorMemoria",
     "ServidorPercepcion",
@@ -72,6 +74,10 @@ def crear_bus_mcp(
             ServidorPercepcion(),
             ServidorSistema(),
             ServidorComms(),
+            ServidorNavegador(
+                callback_confirmacion=callback_confirmacion,
+                audit_log=audit_log,
+            ),
         ],
         audit_log=audit_log,
     )
