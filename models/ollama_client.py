@@ -132,7 +132,7 @@ class OllamaModel(BaseModel):
         inicio = time.monotonic()
         respuesta = await self._cliente.post("/api/chat", json=cuerpo)
         respuesta.raise_for_status()
-        datos = respuesta.json()
+        datos = orjson.loads(respuesta.content)
         duracion = int((time.monotonic() - inicio) * 1000)
 
         mensaje = datos.get("message", {})
@@ -222,7 +222,7 @@ class OllamaModel(BaseModel):
             json={"model": settings.ollama_model_embed, "input": textos},
         )
         respuesta.raise_for_status()
-        return respuesta.json()["embeddings"]
+        return orjson.loads(respuesta.content)["embeddings"]
 
     # ------------------------------------------------------------------
     # Salud

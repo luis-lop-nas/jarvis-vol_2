@@ -66,6 +66,7 @@ RATE_LIMIT = 10       # req/s por session_id
 MAX_HISTORY = 50
 MAX_SESSIONS = 500    # evita DoS por acumulación de sesiones
 MAX_BODY_SIZE = 16 * 1024  # 16 KB
+PERSIST_DEBOUNCE_S = 2.0   # mínimo entre persistencias de pasos intermedios
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +123,11 @@ async def _run_agent_task(
 ) -> None:
     """Tarea de fondo: ejecuta el agente y distribuye updates a SSE y WebSocket."""
     queue = _session_queues[session_id]
+    # La persistencia a disco NO va en el camino caliente: guardar tras cada
+    # update mete un write por token en el streaming. Persistimos solo en
+    # estados que importa restaurar (esperando/listo/error) o, para pasos
+    # intermedios, como mucho una vez cada PERSIST_DEBOUNCE_S.
+    ultimo_guardado = 0.0
     try:
         async for update in agente.run(message, session_id, initial_state=initial_state):
             api_update = _map_update(update)
@@ -129,11 +135,15 @@ async def _run_agent_task(
             hist.append(api_update)
             await queue.put(api_update)
             await manager.send(session_id, api_update.model_dump())
-            # Persistir estado tras cada update (best-effort)
+            # Persistir estado (best-effort, fuera del camino caliente)
             if session_store is not None:
-                state = agente.get_state(session_id)
-                if state is not None:
-                    await session_store.save(session_id, state)
+                ahora = time.monotonic()
+                critico = update.tipo in ("esperando", "listo", "error")
+                if critico or ahora - ultimo_guardado >= PERSIST_DEBOUNCE_S:
+                    state = agente.get_state(session_id)
+                    if state is not None:
+                        await session_store.save(session_id, state)
+                        ultimo_guardado = ahora
     except Exception:
         log.exception("Error en tarea de agente sesión=%s", session_id)
         err = AgentUpdate(type="error", message="Error interno.", state="silent")

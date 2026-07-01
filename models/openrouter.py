@@ -95,7 +95,23 @@ class OpenRouterModel(BaseModel):
         # Candidatos: si el caller fija un modelo, solo ese; si no, la lista de
         # free disponibles para poder rotar cuando uno devuelve 429 (los free
         # populares como kimi:free se saturan constantemente).
-        candidatos = [modelo] if modelo else await self._lista_free()
+        candidatos = [modelo] if modelo else self._lista_free()
+
+        # Caché de respuestas idénticas (mismo patrón que Kimi): un hit devuelve
+        # sin tocar la red. Las peticiones con herramientas no se cachean — sus
+        # tool_calls dependen del estado.
+        clave_cache = self._cache.clave(
+            modelo or "openrouter:free-rotate",
+            mensajes,
+            temperatura,
+            extras={"max_tokens": max_tokens, "tools": bool(herramientas)},
+        )
+        cacheada = self._cache.get(clave_cache) if not herramientas else None
+        if cacheada is not None:
+            from dataclasses import replace
+
+            log.debug("Caché HIT OpenRouter")
+            return replace(cacheada, cached=True)
 
         inicio = time.monotonic()
         respuesta: httpx.Response | None = None
@@ -137,7 +153,7 @@ class OpenRouterModel(BaseModel):
             assert ultimo_error is not None
             raise ultimo_error
 
-        datos = respuesta.json()
+        datos = orjson.loads(respuesta.content)
         duracion = int((time.monotonic() - inicio) * 1000)
 
         eleccion = datos["choices"][0]
@@ -157,6 +173,8 @@ class OpenRouterModel(BaseModel):
             tool_calls=eleccion["message"].get("tool_calls") or [],
             cost_usd=coste,
         )
+        if not herramientas:
+            self._cache.put(clave_cache, respuesta_model)
         await log_model_call(
             self._audit_log,
             modelo=respuesta_model.model,
@@ -233,29 +251,37 @@ class OpenRouterModel(BaseModel):
     # ------------------------------------------------------------------
 
 
-    async def _lista_free(self) -> list[str]:
-        """Lista ordenada de modelos `:free` disponibles (para rotar en 429)."""
-        await self._elegir_free()  # puebla la caché
+    def _lista_free(self) -> list[str]:
+        """Lista ordenada de modelos `:free` para rotar en 429.
+
+        No toca la red: usa el catálogo refinado si ya se cargó (vía
+        ``refrescar_catalogo``), o la lista preferida estática en caso contrario.
+        Así la primera petición no paga un round-trip a ``/models`` — si un
+        slug ya no existe, OpenRouter devuelve error y rotamos igualmente.
+        """
         disponibles = self._modelos_free_disponibles or list(MODELOS_FREE_PREFERIDOS)
         return disponibles or [self.config.name]
 
     async def _elegir_free(self) -> str:
-        """Devuelve el primer modelo del catálogo `:free` que esté disponible."""
-        if self._modelos_free_disponibles is None:
-            try:
-                resp = await self._cliente.get("/models", timeout=5.0)
-                resp.raise_for_status()
-                ids = {m["id"] for m in resp.json().get("data", [])}
-                self._modelos_free_disponibles = [
-                    m for m in MODELOS_FREE_PREFERIDOS if m in ids
-                ]
-            except (httpx.HTTPError, httpx.TransportError) as exc:
-                log.warning("No se pudo listar modelos OpenRouter: %s", exc)
-                self._modelos_free_disponibles = list(MODELOS_FREE_PREFERIDOS)
+        """Primer modelo `:free` a probar (sin round-trip en el camino caliente)."""
+        return self._lista_free()[0]
 
-        if not self._modelos_free_disponibles:
-            return self.config.name
-        return self._modelos_free_disponibles[0]
+    async def refrescar_catalogo(self) -> None:
+        """Refina la lista de modelos `:free` contra el catálogo de OpenRouter.
+
+        Opcional y best-effort: pensado para llamarse en background al arrancar,
+        nunca en el camino de una petición. Descarta de la rotación los slugs que
+        ya no publica OpenRouter, ahorrando intentos fallidos posteriores.
+        """
+        try:
+            resp = await self._cliente.get("/models", timeout=5.0)
+            resp.raise_for_status()
+            ids = {m["id"] for m in orjson.loads(resp.content).get("data", [])}
+            refinada = [m for m in MODELOS_FREE_PREFERIDOS if m in ids]
+            if refinada:
+                self._modelos_free_disponibles = refinada
+        except (httpx.HTTPError, httpx.TransportError) as exc:
+            log.warning("No se pudo refrescar catálogo OpenRouter: %s", exc)
 
 
 # Importación diferida para evitar ciclos

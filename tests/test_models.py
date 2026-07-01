@@ -399,7 +399,30 @@ async def test_ollama_calcula_tokens_por_segundo() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_openrouter_elige_primer_free_disponible() -> None:
+async def test_openrouter_usa_preferido_sin_roundtrip() -> None:
+    """complete() prueba el primer :free preferido sin round-trip a /models."""
+    llamadas: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        llamadas.append(request.url.path)
+        if request.url.path.endswith("/models"):
+            raise AssertionError("complete() no debe consultar /models en el camino caliente")
+        if request.url.path.endswith("/chat/completions"):
+            cuerpo = orjson.loads(request.content)
+            assert cuerpo["model"] == "moonshotai/kimi-k2:free"
+            return httpx.Response(200, json=_respuesta_chat("ok", modelo=cuerpo["model"]))
+        return httpx.Response(404)
+
+    cliente_http = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://x")
+    or_model = OpenRouterModel(cliente=cliente_http)
+    resp = await or_model.complete([Mensaje(rol="user", contenido="hola")])
+    assert resp.model == "moonshotai/kimi-k2:free"
+    assert not any(p.endswith("/models") for p in llamadas)
+    await or_model.cerrar()
+
+
+async def test_openrouter_refrescar_catalogo_refina_rotacion() -> None:
+    """refrescar_catalogo() descarta de la rotación los slugs no publicados."""
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/models"):
             return httpx.Response(
@@ -419,6 +442,7 @@ async def test_openrouter_elige_primer_free_disponible() -> None:
 
     cliente_http = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://x")
     or_model = OpenRouterModel(cliente=cliente_http)
+    await or_model.refrescar_catalogo()  # refina la lista (kimi no está en el catálogo)
     resp = await or_model.complete([Mensaje(rol="user", contenido="hola")])
     assert resp.model == "deepseek/deepseek-chat-v3:free"
     await or_model.cerrar()
