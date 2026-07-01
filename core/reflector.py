@@ -121,11 +121,20 @@ class Reflector:
     ) -> bool:
         """True si todos los pasos obligatorios del plan completaron con éxito.
 
+        Un paso con ``puede_fallar=True`` no bloquea la completitud *si hay pasos
+        obligatorios que sí se hicieron*. Pero si el plan es solo de pasos
+        ``puede_fallar`` (sin obligatorios), no puede darse por completo antes de
+        intentarlos: en ese caso exige que todos se hayan ejecutado con éxito.
+        De lo contrario un plan de un único paso opcional se saltaría sin ejecutar.
+
         Ejemplo::
             done = reflector.evaluate_task_completion(plan, resultados)
         """
         ids_exitosos = {r.id_paso for r in resultados if r.exito}
-        return all(p.id in ids_exitosos for p in plan.pasos if not p.puede_fallar)
+        obligatorios = [p for p in plan.pasos if not p.puede_fallar]
+        if obligatorios:
+            return all(p.id in ids_exitosos for p in obligatorios)
+        return all(p.id in ids_exitosos for p in plan.pasos)
 
     async def generate_summary(
         self, plan: PlanEjecucion, resultados: list[ResultadoPaso]

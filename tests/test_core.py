@@ -328,6 +328,17 @@ class TestReflector:
         resultados = [_resultado("a")]  # "b" no completado pero puede_fallar=True
         assert ref.evaluate_task_completion(plan, resultados) is True
 
+    def test_evaluate_task_completion_solo_opcionales_no_ejecutados(self) -> None:
+        """Un plan solo de pasos puede_fallar NO está completo hasta ejecutarlos.
+
+        Regresión: un plan de un único paso opcional se daba por completo antes de
+        ejecutar nada (all([]) == True), saltándose la ejecución.
+        """
+        ref = self._reflector()
+        plan = _plan(_paso("a", puede_fallar=True))
+        assert ref.evaluate_task_completion(plan, []) is False
+        assert ref.evaluate_task_completion(plan, [_resultado("a")]) is True
+
     @pytest.mark.asyncio
     async def test_reflector_explain_failure_usa_modelo(self) -> None:
         """explain_failure() llama al modelo y devuelve su respuesta."""

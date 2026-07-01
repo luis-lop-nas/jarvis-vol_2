@@ -49,6 +49,7 @@ from models.openrouter import OpenRouterModel
 from security.audit_log import AuditLog
 from security.auth import AuthManager
 from security.confirmation import ConfirmationManager
+from security.permission_manager import PermissionManager
 from security.permissions import PermissionsManager
 from security.sandbox import Sandbox
 from skills.registry import SkillRegistry
@@ -218,12 +219,24 @@ async def _construir_stack() -> AsyncIterator[
     )
     sb = Sandbox(auth_manager=auth, confirmation_manager=cm, audit_log=audit)
 
+    # PermissionManager (políticas por herramienta): punto único de decisión sobre
+    # si una tool puede ejecutarse. Distinto de PermissionsManager (permisos macOS).
+    # Sin él, los skills no registran su política y la defensa de inyección del
+    # agente queda inactiva.
+    permisos_tool = PermissionManager(
+        auth_manager=auth,
+        confirmation_manager=cm,
+        audit_log=audit,
+        permissions_manager=pm,
+    )
+
     # Publicar instancias en el módulo security para acceso global
     security.auth_manager = auth
     security.sandbox = sb
     security.confirmation_manager = cm
     security.audit_log = audit
     security.permissions_manager = pm
+    security.permission_manager = permisos_tool
 
     permisos, ollama_ok, chroma_ok = await asyncio.gather(
         asyncio.to_thread(_check_permisos_macos),
@@ -262,6 +275,7 @@ async def _construir_stack() -> AsyncIterator[
         memoria=memoria,
         mcp_bus=mcp_bus,
         skill_registry=skill_registry,
+        permission_manager=permisos_tool,
     )
 
     try:

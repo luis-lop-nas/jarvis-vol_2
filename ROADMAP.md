@@ -11,21 +11,24 @@ Leyenda: ✅ hecho · 🟡 parcial/existe sin validar · ⬜ por hacer
 
 ---
 
-## Hito 0 — Encender el cerebro  ⏱️ medio día  [DESBLOQUEA TODO]
+## Hito 0 — Encender el cerebro  ✅ HECHO (2026-07-01)  [DESBLOQUEA TODO]
 
-Sin un modelo que genere planes válidos, nada de lo demás sirve. Elegir UNA vía:
+Cerebro encendido vía **Gemini 2.5 Flash** (crédito de pago activo). El agente genera planes
+válidos y ejecuta. Demostrado end-to-end con dos tareas reales.
 
-- ⬜ **Vía nube (rápida):** arreglar acceso a UN modelo capaz
-  - OpenRouter: regenerar API key (hay modelos free 70B) — coste 0.
-  - DeepSeek: añadir ~$2 de saldo — muy capaz y barato.
-  - Kimi: esperar reset del free tier (menos fiable).
-- ⬜ **Vía local (independiente):** liberar RAM para un 7B
-  - Sacar ChromaDB de Docker → usarlo como librería `chromadb` embebida (libera ~3.8 GB del VM).
-  - Cargar `qwen2.5:7b` o similar (cabe con la RAM liberada) y validar que planifica.
-- ⬜ Test de humo: `POST /chat` "abre Spotify y pon música" → el planner devuelve JSON válido.
+- ✅ **Vía nube:** Gemini 2.5 Flash responde (~1.2 s, ~$0.000004/petición). Primer destino del router.
+  - DeepSeek: recargado pero el top-up tarda 1–3 días en liquidar (402 hasta entonces).
+  - OpenRouter: slugs `:free` caducados → 404 (bug latente: `complete()` no rota en 404; pendiente).
+- ✅ Test de humo real: `agente.run("lista los archivos del escritorio")` →
+  `plan → execute_tool → done` con `filesystem.listar`; y `filesystem.leer` en una 2ª tarea.
+- **Bugs de camino corregidos:**
+  - `main.py`: `security.permission_manager` (políticas por herramienta) nunca se instanciaba →
+    skills no registraban política y la defensa de inyección del agente estaba inactiva. Cableado.
+  - `reflector.evaluate_task_completion`: un plan solo de pasos `puede_fallar` se daba por completo
+    antes de ejecutar (`all([]) == True`) → se saltaba la ejecución. Corregido + test de regresión.
 
-**Criterio de hecho:** una tarea sencilla escrita en el modal genera un plan válido y el loop
-llega a `EXECUTE_TOOL` sin caer en `pedir_aclaracion` / runaway guard.
+**Criterio de hecho:** ✅ una tarea sencilla genera un plan válido y el loop llega a `EXECUTE_TOOL`
+sin caer en `pedir_aclaracion` / runaway guard. **Verificado con log real.**
 
 ---
 
@@ -114,7 +117,7 @@ La maquinaria existe (ChromaDB + episódica + procedural + vault). Falta que se 
 
 | Hito | Impacto | Esfuerzo | Depende de |
 |------|---------|----------|-----------|
-| 0 · Cerebro | 🔴 crítico | medio día | — |
+| 0 · Cerebro | ✅ HECHO | — | — |
 | 1 · Ejecución real | 🔴 alto | 2–4 d | H0 |
 | 2 · Voz | 🟠 alto (tu objetivo) | 3–5 d | H0 |
 | 3 · Percepción | 🟠 medio | 2–3 d | H0 |
