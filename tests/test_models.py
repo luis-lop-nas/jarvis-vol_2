@@ -401,6 +401,9 @@ async def test_ollama_calcula_tokens_por_segundo() -> None:
 
 async def test_openrouter_usa_preferido_sin_roundtrip() -> None:
     """complete() prueba el primer :free preferido sin round-trip a /models."""
+    from models.openrouter import MODELOS_FREE_PREFERIDOS
+
+    preferido = MODELOS_FREE_PREFERIDOS[0]
     llamadas: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -409,42 +412,64 @@ async def test_openrouter_usa_preferido_sin_roundtrip() -> None:
             raise AssertionError("complete() no debe consultar /models en el camino caliente")
         if request.url.path.endswith("/chat/completions"):
             cuerpo = orjson.loads(request.content)
-            assert cuerpo["model"] == "moonshotai/kimi-k2:free"
+            assert cuerpo["model"] == preferido
             return httpx.Response(200, json=_respuesta_chat("ok", modelo=cuerpo["model"]))
         return httpx.Response(404)
 
     cliente_http = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://x")
     or_model = OpenRouterModel(cliente=cliente_http)
     resp = await or_model.complete([Mensaje(rol="user", contenido="hola")])
-    assert resp.model == "moonshotai/kimi-k2:free"
+    assert resp.model == preferido
     assert not any(p.endswith("/models") for p in llamadas)
+    await or_model.cerrar()
+
+
+async def test_openrouter_rota_en_404_slug_caducado() -> None:
+    """Un slug :free caducado (404) rota al siguiente en vez de propagar el error."""
+    from models.openrouter import MODELOS_FREE_PREFERIDOS
+
+    muerto = MODELOS_FREE_PREFERIDOS[0]
+    vivo = MODELOS_FREE_PREFERIDOS[1]
+    modelos_probados: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        cuerpo = orjson.loads(request.content)
+        modelos_probados.append(cuerpo["model"])
+        if cuerpo["model"] == muerto:
+            # OpenRouter devuelve 404 cuando el slug ya no existe en el catálogo.
+            return httpx.Response(404, json={"error": {"message": "No endpoints found"}})
+        return httpx.Response(200, json=_respuesta_chat("ok", modelo=cuerpo["model"]))
+
+    cliente_http = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://x")
+    or_model = OpenRouterModel(cliente=cliente_http)
+    resp = await or_model.complete([Mensaje(rol="user", contenido="hola")])
+    assert resp.model == vivo
+    assert modelos_probados == [muerto, vivo]  # probó el muerto y rotó al vivo
     await or_model.cerrar()
 
 
 async def test_openrouter_refrescar_catalogo_refina_rotacion() -> None:
     """refrescar_catalogo() descarta de la rotación los slugs no publicados."""
+    from models.openrouter import MODELOS_FREE_PREFERIDOS
+
+    # El catálogo solo publica el 2º preferido → la rotación debe empezar por él,
+    # saltándose el 1º (que ya no aparece en /models).
+    solo_segundo = MODELOS_FREE_PREFERIDOS[1]
+
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/models"):
-            return httpx.Response(
-                200,
-                json={
-                    "data": [
-                        {"id": "deepseek/deepseek-chat-v3:free"},
-                        {"id": "qwen/qwen3-coder:free"},
-                    ]
-                },
-            )
+            return httpx.Response(200, json={"data": [{"id": solo_segundo}]})
         if request.url.path.endswith("/chat/completions"):
             cuerpo = orjson.loads(request.content)
-            assert cuerpo["model"] == "deepseek/deepseek-chat-v3:free"
+            assert cuerpo["model"] == solo_segundo
             return httpx.Response(200, json=_respuesta_chat("ok", modelo=cuerpo["model"]))
         return httpx.Response(404)
 
     cliente_http = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://x")
     or_model = OpenRouterModel(cliente=cliente_http)
-    await or_model.refrescar_catalogo()  # refina la lista (kimi no está en el catálogo)
+    await or_model.refrescar_catalogo()  # refina: solo el 2º preferido sigue vivo
     resp = await or_model.complete([Mensaje(rol="user", contenido="hola")])
-    assert resp.model == "deepseek/deepseek-chat-v3:free"
+    assert resp.model == solo_segundo
     await or_model.cerrar()
 
 

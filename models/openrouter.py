@@ -34,13 +34,16 @@ from models.base import (
 
 log = logging.getLogger(__name__)
 
-# Slugs de OpenRouter por orden de preferencia. Todos `:free` salvo que cambie.
+# Slugs de OpenRouter por orden de preferencia. Todos `:free` y verificados
+# vivos contra el catálogo (2026-07-02). Priorizados por fiabilidad de tool-use
+# / planificación JSON, que es lo que el agente necesita. Si uno caduca, la
+# rotación en 404 salta al siguiente; `refrescar_catalogo()` los poda en frío.
 MODELOS_FREE_PREFERIDOS: tuple[str, ...] = (
-    "moonshotai/kimi-k2:free",
-    "deepseek/deepseek-chat-v3:free",
-    "qwen/qwen3-coder:free",
-    "qwen/qwen3:free",
     "meta-llama/llama-3.3-70b-instruct:free",
+    "qwen/qwen3-next-80b-a3b-instruct:free",
+    "openai/gpt-oss-120b:free",
+    "qwen/qwen3-coder:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
 )
 
 
@@ -130,9 +133,13 @@ class OpenRouterModel(BaseModel):
                 cuerpo["tools"] = herramientas
             cuerpo.update(kwargs)
 
-            # Un único intento por modelo: si da 429 (saturación upstream del
-            # free tier) rotamos al siguiente en vez de reintentar el mismo, que
-            # solo consumiría cuota. El _retry se reserva para errores de red.
+            # Un único intento por modelo: rotamos al siguiente free en vez de
+            # reintentar el mismo cuando el fallo es del propio slug/upstream:
+            #   - 404: el slug ya no existe en el catálogo (los `:free` caducan).
+            #   - 429: saturación upstream del free tier (los populares se saturan).
+            #   - 502/503: upstream caído temporalmente.
+            # El _retry se reserva para errores de red. Errores de la petición
+            # (400/401/403) sí se propagan: rotar no los arreglaría.
             try:
                 resp = await self._cliente.post("/chat/completions", json=cuerpo)
                 resp.raise_for_status()
@@ -140,7 +147,7 @@ class OpenRouterModel(BaseModel):
                 break
             except httpx.HTTPStatusError as exc:
                 ultimo_error = exc
-                if exc.response.status_code in (429, 502, 503):
+                if exc.response.status_code in (404, 429, 502, 503):
                     log.warning("OpenRouter %s no disponible (%d); probando siguiente free",
                                 modelo_id, exc.response.status_code)
                     continue
