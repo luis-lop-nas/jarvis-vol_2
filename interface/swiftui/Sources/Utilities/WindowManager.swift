@@ -1,6 +1,14 @@
 import AppKit
 import SwiftUI
 
+// MARK: - Ventana borderless que puede recibir foco de teclado
+// Una NSWindow .borderless devuelve canBecomeKey=false por defecto, así que su
+// TextField no acepta escritura. El modal y el onboarding la necesitan key.
+final class KeyableWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+}
+
 // MARK: - Posición preferida para InlineView por app (P5a)
 
 enum InlinePosition {
@@ -42,13 +50,24 @@ final class WindowManager {
     func showNotch<V: View>(content: V) {
         let screen = NSScreen.main ?? NSScreen.screens[0]
         let screenFrame = screen.frame
-        let width: CGFloat = 240
-        let height: CGFloat = 38
+        // La ventana usa el tamaño expandido (340×44); el NotchView anima colapsado↔expandido dentro.
+        let width: CGFloat = 340
+        let height: CGFloat = 44
         let x = screenFrame.midX - width / 2
         let y = screenFrame.maxY - height
+        let frame = NSRect(x: x, y: y, width: width, height: height)
+
+        // Reutilizar la ventana existente para evitar apilar/gotear ventanas al
+        // refrescar el notch en cada actualización (P2: notch siempre visible).
+        if let existing = notchWindow {
+            existing.setFrame(frame, display: false)
+            existing.contentView = NSHostingView(rootView: content)
+            existing.orderFront(nil)
+            return
+        }
 
         notchWindow = _makeWindow(
-            frame: NSRect(x: x, y: y, width: width, height: height),
+            frame: frame,
             level: .statusBar,
             content: content
         )
@@ -97,9 +116,11 @@ final class WindowManager {
         modalWindow = _makeWindow(
             frame: NSRect(x: x, y: y, width: width, height: height),
             level: .modalPanel,
-            content: content
+            content: content,
+            canBecomeKey: true
         )
-        modalWindow?.orderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        modalWindow?.makeKeyAndOrderFront(nil)
     }
 
     func hideModal() {
@@ -148,10 +169,11 @@ final class WindowManager {
         onboardingWindow = _makeWindow(
             frame: NSRect(x: x, y: y, width: width, height: height),
             level: .modalPanel,
-            content: content
+            content: content,
+            canBecomeKey: true
         )
-        onboardingWindow?.orderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        onboardingWindow?.makeKeyAndOrderFront(nil)
     }
 
     func closeOnboarding() {
@@ -185,14 +207,22 @@ final class WindowManager {
     private func _makeWindow<V: View>(
         frame: NSRect,
         level: NSWindow.Level,
-        content: V
+        content: V,
+        canBecomeKey: Bool = false
     ) -> NSWindow {
-        let window = NSWindow(
-            contentRect: frame,
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
+        let window: NSWindow = canBecomeKey
+            ? KeyableWindow(
+                contentRect: frame,
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false
+            )
+            : NSWindow(
+                contentRect: frame,
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false
+            )
         window.level = level
         window.isOpaque = false
         window.backgroundColor = .clear

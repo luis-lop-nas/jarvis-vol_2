@@ -98,6 +98,16 @@ async def _verificar_ollama() -> bool:
 
 
 async def _verificar_chroma() -> bool:
+    # Modo embebido (PersistentClient): no hay servidor HTTP. Se considera OK
+    # si la ruta de persistencia es escribible; el cliente se crea al instanciar
+    # LongTermMemory. Modo docker: heartbeat HTTP al servidor.
+    if settings.chroma_mode != "docker":
+        try:
+            settings.chromadb_path.mkdir(parents=True, exist_ok=True)
+            return True
+        except Exception:
+            return False
+
     base = f"http://{settings.chroma_host}:{settings.chroma_port}"
     try:
         async with httpx.AsyncClient(timeout=3.0) as c:

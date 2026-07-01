@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import time
 from collections import defaultdict, deque
 from collections.abc import AsyncGenerator
@@ -343,17 +344,23 @@ def crear_servidor(
     @app.get("/status", response_model=SystemStatus)
     async def status_check() -> SystemStatus:
         chroma_ok = False
-        try:
-            base = f"http://{settings.chroma_host}:{settings.chroma_port}"
-            async with httpx.AsyncClient(timeout=2.0) as c:
-                # ChromaDB >=1.0 expone /api/v2; versiones antiguas /api/v1.
-                for ruta in ("/api/v2/heartbeat", "/api/v1/heartbeat"):
-                    r = await c.get(f"{base}{ruta}")
-                    if r.status_code == 200:
-                        chroma_ok = True
-                        break
-        except Exception:
-            pass
+        if settings.chroma_mode == "docker":
+            try:
+                base = f"http://{settings.chroma_host}:{settings.chroma_port}"
+                async with httpx.AsyncClient(timeout=2.0) as c:
+                    # ChromaDB >=1.0 expone /api/v2; versiones antiguas /api/v1.
+                    for ruta in ("/api/v2/heartbeat", "/api/v1/heartbeat"):
+                        r = await c.get(f"{base}{ruta}")
+                        if r.status_code == 200:
+                            chroma_ok = True
+                            break
+            except Exception:
+                pass
+        else:
+            # Modo embebido (PersistentClient): sin servidor HTTP. Chroma está
+            # "conectado" si la colección se creó al arrancar el cliente local.
+            with contextlib.suppress(Exception):
+                chroma_ok = agente._memoria._long_term._coleccion is not None
 
         ollama_ok = False
         models: list[str] = []
@@ -408,6 +415,88 @@ def crear_servidor(
         raw = skill_registry.listar()
         skills = [SkillInfo(**s) for s in raw]
         return SkillsResponse(total=len(skills), skills=skills)
+
+    # ------------------------------------------------------------------
+    # POST /debug/inject — inyecta estados sintéticos en el overlay (solo QA)
+    # ------------------------------------------------------------------
+    # Solo activo si la variable de entorno JARVIS_DEBUG_OVERLAY está a "1".
+    # Permite recorrer los colores del notch, el edge log y la confirmation card
+    # sin depender del LLM (que en 8GB no planea). No deja superficie en
+    # producción: sin el flag devuelve 404. Requiere token de API.
+
+    _DEBUG_FRAMES: dict[str, dict[str, Any]] = {
+        "thinking": {
+            "type": "thinking",
+            "message": "Analizando tu petición…",
+            "progress": 0.15,
+            "state": "thinking",
+            "step": {"modelo": "kimi-k2", "tokens": 1280, "cost_usd": 0.0021},
+        },
+        "acting": {
+            "type": "acting",
+            "message": "Ejecutando herramienta",
+            "progress": 0.55,
+            "state": "acting",
+            "step": {
+                "id": "paso-1",
+                "descripcion": "Leyendo config/settings.py",
+                "herramienta": "filesystem.leer",
+            },
+        },
+        "done": {
+            "type": "done",
+            "message": "Listo. He completado la tarea correctamente.",
+            "progress": 1.0,
+            "state": "done",
+        },
+        "error": {
+            "type": "error",
+            "message": "Timeout al contactar con la API del modelo",
+            "progress": 0.0,
+            "state": "error",
+        },
+        "inline": {
+            "type": "inline",
+            "message": "¿Quieres que ejecute los tests del archivo abierto?",
+            "progress": 0.0,
+            "state": "inline",
+            "step": {"app": "com.microsoft.VSCode"},
+        },
+        "confirm": {
+            "type": "waiting",
+            "data": {
+                "confirmation_id": "debug-conf-1",
+                "action": "Eliminar 4 archivos temporales del escritorio",
+                "command": "rm -rf ~/Desktop/tmp_a ~/Desktop/tmp_b ~/Desktop/tmp_c ~/Desktop/tmp_d",
+                "action_type": "filesystem.eliminar",
+                "risk_level": "dangerous",
+                "affected_items": [
+                    "~/Desktop/tmp_a.log",
+                    "~/Desktop/tmp_b.log",
+                    "~/Desktop/tmp_c.log",
+                    "~/Desktop/tmp_d.log",
+                ],
+                "affected_count": 4,
+                "expires_in": 60,
+            },
+        },
+    }
+
+    @app.post("/debug/inject/{frame}", dependencies=[Depends(require_auth)])
+    async def debug_inject(
+        frame: Annotated[str, Path(pattern=r"^[a-z]{1,16}$")],
+    ) -> dict[str, Any]:
+        if os.getenv("JARVIS_DEBUG_OVERLAY") != "1":
+            raise HTTPException(status_code=404, detail="No encontrado")
+        payload = _DEBUG_FRAMES.get(frame)
+        if payload is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"frame desconocido; usa uno de {sorted(_DEBUG_FRAMES)}",
+            )
+        # broadcast llega al overlay independientemente de su session_id.
+        await manager.broadcast(payload)
+        return {"injected": frame, "sessions": manager.get_active_sessions()}
 
     # ------------------------------------------------------------------
     # GET /sessions — metadatos de sesiones persistidas en disco

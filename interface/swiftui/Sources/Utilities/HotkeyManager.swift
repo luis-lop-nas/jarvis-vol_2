@@ -1,116 +1,102 @@
 import AppKit
-import Carbon
-import UserNotifications
+import Carbon.HIToolbox
+
+// API privada de CoreGraphics para activar/desactivar los "symbolic hotkeys" del
+// sistema en runtime. Se usa para liberar ⌘⌥Space (ver más abajo). No añade
+// dependencias: es una función del propio sistema declarada con @_silgen_name.
+@_silgen_name("CGSSetSymbolicHotKeyEnabled")
+private func CGSSetSymbolicHotKeyEnabled(_ hotKey: CInt, _ enabled: Bool) -> CInt
 
 // MARK: - HotkeyManager
-// Hotkey principal: ⌘⌥Space (evita conflicto con Spotlight de ⌘Space).
-// Fallback si CGEventTap falla: ⌘⇧Space via NSEvent global monitor.
+// Hotkey global ⌘⌥Space vía Carbon RegisterEventHotKey.
+//
+// Motivo del cambio (P1): había DOS causas por las que "el modal no aparece":
+//   1. CGEventTap y NSEvent.addGlobalMonitorForEvents(.keyDown) requieren permiso
+//      de Accesibilidad. El binario se firma ad-hoc y su identidad cambia en cada
+//      rebuild, así que macOS invalida la Accesibilidad concedida. RegisterEventHotKey
+//      NO necesita Accesibilidad.
+//   2. ⌘⌥Space está reservado por macOS para "búsqueda en Finder" (symbolic hotkey
+//      65). El sistema lo consume antes que la app, así que ni siquiera llegaba a
+//      nuestro handler. Lo desactivamos en runtime con CGSSetSymbolicHotKeyEnabled
+//      y lo restauramos al cerrar la app (para no dejar el atajo del usuario roto).
+// Carbon ya estaba importado; no se añaden dependencias nuevas.
+
+// ID del symbolic hotkey de macOS "Show Finder search window" (⌘⌥Space).
+private let kFinderSearchHotKeyID: CInt = 65
 
 final class HotkeyManager {
     static let shared = HotkeyManager()
 
     var onFocusModal: (() -> Void)?
 
-    private var eventTap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
-
-    private let kTargetKeyCode: CGKeyCode = 49  // kVK_Space
+    private var hotKeyRef: EventHotKeyRef?
+    private var eventHandler: EventHandlerRef?
+    private var finderHotKeyDisabled = false
 
     private init() {}
 
     func start() {
-        let mask: CGEventMask = 1 << CGEventType.keyDown.rawValue
-        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-
-        eventTap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .defaultTap,
-            eventsOfInterest: mask,
-            callback: { proxy, type, event, refcon -> Unmanaged<CGEvent>? in
-                guard let refcon else { return Unmanaged.passUnretained(event) }
-                let manager = Unmanaged<HotkeyManager>.fromOpaque(refcon).takeUnretainedValue()
-                return manager._handle(proxy: proxy, type: type, event: event)
-            },
-            userInfo: selfPtr
-        )
-
-        guard let tap = eventTap else {
-            // CGEventTap requiere Accesibilidad. Si falla, usar monitor Cocoa.
-            _notifyTapFailed()
-            _registerFallbackHotkey()
-            return
+        // Liberar ⌘⌥Space desactivando el atajo de Finder (symbolic hotkey 65).
+        if CGSSetSymbolicHotKeyEnabled(kFinderSearchHotKeyID, false) == 0 {
+            finderHotKeyDisabled = true
+        } else {
+            NSLog("JARVIS: no se pudo desactivar el atajo de Finder (⌘⌥Space)")
         }
 
-        runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        if let source = runLoopSource {
-            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
-            CGEvent.tapEnable(tap: tap, enable: true)
+        var eventType = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: OSType(kEventHotKeyPressed)
+        )
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+
+        InstallEventHandler(
+            GetApplicationEventTarget(),
+            { _, _, userData -> OSStatus in
+                guard let userData else { return noErr }
+                let manager = Unmanaged<HotkeyManager>.fromOpaque(userData).takeUnretainedValue()
+                manager._fire()
+                return noErr
+            },
+            1,
+            &eventType,
+            selfPtr,
+            &eventHandler
+        )
+
+        // 'JRS1' como firma del hotkey; id 1.
+        let hotKeyID = EventHotKeyID(signature: OSType(0x4A525331), id: 1)
+        let modifiers = UInt32(cmdKey | optionKey)
+
+        let status = RegisterEventHotKey(
+            UInt32(kVK_Space),
+            modifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &hotKeyRef
+        )
+        if status != noErr {
+            NSLog("JARVIS: RegisterEventHotKey falló con código \(status)")
         }
     }
 
     func stop() {
-        if let tap = eventTap {
-            CGEvent.tapEnable(tap: tap, enable: false)
+        if let hotKeyRef {
+            UnregisterEventHotKey(hotKeyRef)
+            self.hotKeyRef = nil
         }
-        if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
+        if let eventHandler {
+            RemoveEventHandler(eventHandler)
+            self.eventHandler = nil
         }
-    }
-
-    // MARK: Private
-
-    private func _handle(
-        proxy: CGEventTapProxy,
-        type: CGEventType,
-        event: CGEvent
-    ) -> Unmanaged<CGEvent>? {
-        guard type == .keyDown else { return Unmanaged.passUnretained(event) }
-
-        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-        let flags = event.flags
-
-        // Primario: ⌘⌥Space
-        let isCmdAltSpace = keyCode == kTargetKeyCode
-            && flags.contains(.maskCommand)
-            && flags.contains(.maskAlternate)
-            && !flags.contains(.maskShift)
-
-        if isCmdAltSpace {
-            DispatchQueue.main.async { [weak self] in self?.onFocusModal?() }
-            return nil  // consume el evento
-        }
-        return Unmanaged.passUnretained(event)
-    }
-
-    // Fallback: ⌘⇧Space (NSEvent no consume el evento)
-    private func _registerFallbackHotkey() {
-        NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self else { return }
-            let isCmdShiftSpace = event.keyCode == self.kTargetKeyCode
-                && event.modifierFlags.contains(.command)
-                && event.modifierFlags.contains(.shift)
-                && !event.modifierFlags.contains(.option)
-            if isCmdShiftSpace { self.onFocusModal?() }
+        // Restaurar el atajo de Finder si lo habíamos desactivado.
+        if finderHotKeyDisabled {
+            _ = CGSSetSymbolicHotKeyEnabled(kFinderSearchHotKeyID, true)
+            finderHotKeyDisabled = false
         }
     }
 
-    private func _notifyTapFailed() {
-        // Solo notificar una vez
-        let key = "jarvis.hotkey.tapFailedNotified"
-        guard !UserDefaults.standard.bool(forKey: key) else { return }
-        UserDefaults.standard.set(true, forKey: key)
-
-        let content = UNMutableNotificationContent()
-        content.title = "JARVIS"
-        content.body = "⌘Space está ocupado por Spotlight. Usando ⌘⇧Space como alternativa. " +
-                       "Puedes cambiar Spotlight en Ajustes del Sistema → Siri y Spotlight."
-
-        let request = UNNotificationRequest(
-            identifier: "jarvis.hotkey.conflict",
-            content: content,
-            trigger: UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
-        )
-        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+    private func _fire() {
+        DispatchQueue.main.async { [weak self] in self?.onFocusModal?() }
     }
 }

@@ -160,6 +160,20 @@ final class JARVISState {
 
     private var logSteps: [LogStep] = []
 
+    // P2 — Texto/modelo que el notch muestra en cada fase. El notch es el
+    // elemento persistente y debe reflejar SIEMPRE la fase (los 4 colores),
+    // aunque además se muestre el edge log durante `acting`.
+    var notchStatusText: String {
+        switch agentPhase {
+        case .thinking:  return "Pensando…"
+        case .acting:    return currentToolName ?? "Ejecutando"
+        case .completed: return "Listo"
+        case .error:     return errorMessage ?? "Error"
+        }
+    }
+
+    var notchModel: String { lastModelUsed ?? "" }
+
     func applyUpdate(_ update: AgentUpdate) {
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
             currentProgress = update.progress
@@ -247,6 +261,17 @@ final class JARVISState {
                 )
                 focusModalShown = true
 
+            case "inline", "sugerencia":
+                // Sugerencia contextual anclada a la app activa (P5). El bundle id
+                // opcional en step["app"] elige la variante de InlineView; si falta,
+                // se usa genérico. Sin este caso, uiState nunca llegaba a .inline.
+                let app = (update.step.flatMap { dict -> String? in
+                    guard case .string(let a) = dict["app"] ?? dict["bundle_id"] else { return nil }
+                    return a
+                }) ?? ""
+                agentPhase = .completed
+                uiState = .inline(app: app, suggestion: update.message)
+
             case "done", "listo":
                 agentPhase = .completed
                 currentToolName = nil
@@ -311,6 +336,12 @@ final class JARVISState {
                 affectedItems: data.affectedItems,
                 affectedCount: data.affectedCount ?? (data.affectedItems?.count ?? 0)
             )
+            // Surface el modal aunque el overlay esté en reposo: sin poner uiState
+            // en .focusModal, _syncWindowsToState no abre la ventana y la tarjeta
+            // de confirmación no llegaría a verse.
+            if case .focusModal = uiState {} else {
+                uiState = .focusModal(query: "", response: "", steps: [])
+            }
             focusModalShown = true
         }
     }

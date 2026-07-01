@@ -66,12 +66,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         wsClient.onConnectionChange = { [weak self] connected in
             Task { @MainActor [weak self] in
-                self?.state.isConnected = connected
+                guard let self else { return }
+                self.state.isConnected = connected
+                if connected { self.state.isDisconnected = false }
+                self._refreshNotch()  // reflejar (re)conexión en el notch (P7)
             }
         }
         wsClient.onLongDisconnect = { [weak self] in
             Task { @MainActor [weak self] in
-                self?.state.isDisconnected = true
+                guard let self else { return }
+                self.state.isDisconnected = true
+                self._refreshNotch()  // notch rojo "Sin conexión" (P7)
             }
         }
         wsClient.onConfirmation = { [weak self] data in
@@ -144,23 +149,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func _syncWindowsToState() {
+        // El notch es persistente: refleja SIEMPRE la fase actual (los 4 colores),
+        // salvo en silencio. Las demás vistas se muestran como capas adicionales.
+        _refreshNotch()
+
         switch state.uiState {
         case .silent:
             WindowManager.shared.hideEdge()
             _hideFocusModal()
 
-        case .notchPulse(let status, let model):
-            WindowManager.shared.showNotch(content:
-                NotchView(
-                    status: status,
-                    model: model,
-                    agentPhase: state.agentPhase,
-                    currentToolName: state.currentToolName,
-                    errorMessage: state.errorMessage,
-                    progressFraction: state.currentProgress
-                )
-                .environment(state)
-            )
+        case .notchPulse:
+            WindowManager.shared.hideEdge()
 
         case .edgeLog(let steps):
             WindowManager.shared.showEdge(content:
@@ -180,6 +179,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
             )
         }
+    }
+
+    @MainActor
+    private func _refreshNotch() {
+        WindowManager.shared.showNotch(content:
+            NotchView(
+                status: state.notchStatusText,
+                model: state.notchModel,
+                agentPhase: state.agentPhase,
+                currentToolName: state.currentToolName,
+                errorMessage: state.errorMessage,
+                progressFraction: state.currentProgress,
+                isDisconnected: state.isDisconnected
+            )
+            .environment(state)
+        )
     }
 
     private func _showFocusModal() {

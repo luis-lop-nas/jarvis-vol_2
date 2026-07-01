@@ -6,7 +6,7 @@ services:
     ports:
       - "${CHROMADB_PORT:-8000}:8000"
     volumes:
-      - ./data/chromadb:/chroma/chroma
+      - chromadb-data:/chroma/chroma
     environment:
       - IS_PERSISTENT=TRUE
       - PERSIST_DIRECTORY=/chroma/chroma
@@ -32,6 +32,10 @@ services:
       - GENERIC_TIMEZONE=Europe/Madrid
       - TZ=Europe/Madrid
       - N8N_RUNNERS_ENABLED=true
+
+volumes:
+  chromadb-data:
+    name: jarvis-chromadb-data
 
 networks:
   default:

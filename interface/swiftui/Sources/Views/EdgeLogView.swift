@@ -13,7 +13,10 @@ struct EdgeLogView: View {
     private let bg = Color(red: 0.05, green: 0.05, blue: 0.06).opacity(0.92)
     private let expandedWidth: CGFloat = 200
 
-    private var isExpanded: Bool { isHovered || isPinned }
+    // Expandido al hover, si está anclado, o mientras hay un paso activo (P3):
+    // el log se abre solo cuando hay trabajo en curso y se colapsa al terminar.
+    private var hasActiveStep: Bool { steps.contains { $0.status == .active } }
+    private var isExpanded: Bool { isHovered || isPinned || hasActiveStep }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -59,6 +62,9 @@ struct EdgeLogView: View {
             }
         }
         .animation(.interpolatingSpring(stiffness: 300, damping: 28), value: isExpanded)
+        // Anclar al borde derecho de la pantalla: dentro de la ventana de 200px el
+        // strip de 3px se centraba (quedaba flotando y el hover no caía en el borde).
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
     }
 
     private var stepList: some View {

@@ -92,26 +92,51 @@ class OpenRouterModel(BaseModel):
         herramientas: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> ModelResponse:
-        modelo_id = modelo or await self._elegir_free()
-        cuerpo: dict[str, Any] = {
-            "model": modelo_id,
-            "messages": [mensaje_a_dict(m) for m in mensajes],
-            "temperature": temperatura,
-        }
-        if max_tokens is not None:
-            cuerpo["max_tokens"] = max_tokens
-        if herramientas:
-            cuerpo["tools"] = herramientas
-        cuerpo.update(kwargs)
+        # Candidatos: si el caller fija un modelo, solo ese; si no, la lista de
+        # free disponibles para poder rotar cuando uno devuelve 429 (los free
+        # populares como kimi:free se saturan constantemente).
+        candidatos = [modelo] if modelo else await self._lista_free()
 
         inicio = time.monotonic()
+        respuesta: httpx.Response | None = None
+        modelo_id = candidatos[0]
+        ultimo_error: Exception | None = None
 
-        async def _llamar() -> httpx.Response:
-            resp = await self._cliente.post("/chat/completions", json=cuerpo)
-            resp.raise_for_status()
-            return resp
+        for modelo_id in candidatos:
+            cuerpo: dict[str, Any] = {
+                "model": modelo_id,
+                "messages": [mensaje_a_dict(m) for m in mensajes],
+                "temperature": temperatura,
+            }
+            if max_tokens is not None:
+                cuerpo["max_tokens"] = max_tokens
+            if herramientas:
+                cuerpo["tools"] = herramientas
+            cuerpo.update(kwargs)
 
-        respuesta = await self._retry.ejecutar(_llamar)
+            # Un único intento por modelo: si da 429 (saturación upstream del
+            # free tier) rotamos al siguiente en vez de reintentar el mismo, que
+            # solo consumiría cuota. El _retry se reserva para errores de red.
+            try:
+                resp = await self._cliente.post("/chat/completions", json=cuerpo)
+                resp.raise_for_status()
+                respuesta = resp
+                break
+            except httpx.HTTPStatusError as exc:
+                ultimo_error = exc
+                if exc.response.status_code in (429, 502, 503):
+                    log.warning("OpenRouter %s no disponible (%d); probando siguiente free",
+                                modelo_id, exc.response.status_code)
+                    continue
+                raise
+            except (httpx.HTTPError, httpx.TransportError) as exc:
+                ultimo_error = exc
+                continue
+
+        if respuesta is None:
+            assert ultimo_error is not None
+            raise ultimo_error
+
         datos = respuesta.json()
         duracion = int((time.monotonic() - inicio) * 1000)
 
@@ -207,6 +232,12 @@ class OpenRouterModel(BaseModel):
     # Selector de modelo free
     # ------------------------------------------------------------------
 
+
+    async def _lista_free(self) -> list[str]:
+        """Lista ordenada de modelos `:free` disponibles (para rotar en 429)."""
+        await self._elegir_free()  # puebla la caché
+        disponibles = self._modelos_free_disponibles or list(MODELOS_FREE_PREFERIDOS)
+        return disponibles or [self.config.name]
 
     async def _elegir_free(self) -> str:
         """Devuelve el primer modelo del catálogo `:free` que esté disponible."""

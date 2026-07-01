@@ -22,6 +22,125 @@
 
 ## ✅ Completado recientemente
 
+### H0 (Camino A) — Cerebro local: ChromaDB embebido, sin Docker (2026-07-01)
+
+Objetivo: liberar RAM para que un modelo local capaz sea el cerebro (ver `ROADMAP.md`).
+
+- **Descubrimiento clave:** el `qwen2.5:3b` **SÍ es capaz** de planificar. Llamándolo directo
+  genera planes JSON válidos con herramientas y dependencias correctas (p.ej. "abre Spotify y
+  sube volumen 70%" → 2 pasos válidos). Lo que fallaba era el **guard de RAM**: con Docker
+  abierto solo había ~2 GB libres → el guard caía a `qwen2.5:0.5b`, que genera JSON válido pero
+  **semánticamente mal** (de ahí la impresión de "no hay cerebro"). El 3b es cerebro real pero
+  justo: bien en tareas simples, inconsistente en complejas (JSON inválido, flags de confirmación).
+- **ChromaDB embebido (`memory/long_term.py`):** el cliente ahora respeta `settings.chroma_mode`
+  (ya existía sin cablear). `local` → `chromadb.PersistentClient(path=chromadb_path)` (embebido,
+  sin Docker); `docker` → `HttpClient` (como antes). Default `local`.
+- **Health checks (`main.py`, `interface/api.py`):** en modo embebido ya no hacen heartbeat HTTP
+  al puerto 8000 (no hay servidor); comprueban la ruta de persistencia / que la colección se creó.
+- **`.env` / `.env.example`:** `CHROMA_MODE=local` documentado.
+- **RAM:** el ~3.8 GB lo reserva **Docker Desktop entero** (el VM), no solo el contenedor →
+  para liberarlo hay que **cerrar Docker Desktop**, no solo parar el contenedor. Con Docker
+  cerrado + chroma embebido, el 3b carga y planifica (verificado: "abre Spotify" → plan válido e2e).
+- **Backend arranca embebido:** `Colección ChromaDB lista (local)` ×6, `chroma_connected: true`,
+  sin Docker. Suite: 464 verde; 2 fallos ambientales (telegram no instalado; guard de RAM del
+  test de ollama por RAM exhausta con IDE+CLI abiertos) — no son regresiones del cambio.
+- **Migración de datos:** no se migran los datos del volumen Docker anterior; el modo embebido
+  arranca con colecciones nuevas (la memoria se repuebla). Aceptable en dev.
+
+**Pendiente inmediato:** Camino B (modelo cloud potente: OpenRouter key o saldo DeepSeek) para
+tareas complejas donde el 3b falla. En 8GB el 3b es el techo local práctico (un 7B necesita ~4.7 GB).
+
+### QA runtime del overlay P1–P8 + pulido visual con medidas reales (2026-07-01)
+
+Los 8 estados verificados **en runtime con `screencapture` real** (no solo compila), sin
+depender del LLM (que no planea en 8GB). Método: endpoint DEBUG `/debug/inject/{frame}`
+(gated por `JARVIS_DEBUG_OVERLAY=1` + token) que hace `broadcast` de `ActualizacionAgente`
+y `ConfirmationRequest` sintéticas por el `ConnectionManager`.
+
+**Investigación de diseño → `interface/swiftui/DESIGN_NOTES.md`**
+- Medidas extraídas del código de DynamicNotchKit y boring.notch (radios cerrado 6/14,
+  abierto ~19-20/24; notch físico ~185pt ancho, alto 32; animación `.bouncy(0.4)`/`.smooth(0.4)`).
+- Máquina: `Mac15,12` (MacBook Air 15" M3) — tiene notch físico.
+
+**P1 — Hotkey ⌘⌥Space (bug nº1, RESUELTO)**
+- Root cause **doble**: (1) CGEventTap y el fallback `NSEvent` global de teclado requieren
+  Accesibilidad, que se invalida en cada rebuild ad-hoc; (2) **⌘⌥Space está reservado por
+  macOS para "búsqueda en Finder"** (symbolic hotkey 65, confirmado `enabled`) → el sistema
+  lo consumía antes que la app y abría Finder, no el modal.
+- Fix: `HotkeyManager` reescrito con **Carbon `RegisterEventHotKey`** (no necesita
+  Accesibilidad, sin deps nuevas) + desactivación en runtime del symbolic hotkey 65 vía
+  `CGSSetSymbolicHotKeyEnabled(65,false)`, restaurado en `stop()`. Verificado: ⌘⌥Space abre
+  el FocusModal.
+- Modal: `KeyableWindow` (borderless no podía ser key → el TextField no aceptaba escritura)
+  + `NSApp.activate` + `makeKeyAndOrderFront`; `@FocusState` auto-enfoca el input al abrir.
+
+**P2 — NotchView (4 colores verificados)**
+- Colapsado 120×22 → **200×32** (antes más estrecho que el notch físico → quedaba oculto);
+  expandido 240×38 → **340×44**; radios top 0→6, bottom 14→20 (expandido); `.bouncy/.smooth`.
+- El notch ahora refleja **siempre** la fase (thinking azul / acting ámbar / completed verde
+  / error rojo): `_syncWindowsToState` refresca el notch en cada sync (antes acting/completed
+  conmutaban a otras vistas y el notch no cambiaba de color). `showNotch` reutiliza la ventana.
+
+**P3 — EdgeLogView**
+- Bug: el strip de 3px se renderizaba **centrado** en la ventana de 200px (flotaba, hover
+  descolocado). Fix: `.frame(alignment: .trailing)` lo ancla al borde derecho.
+- Auto-expand mientras haya un paso activo (`hasActiveStep`) — se abre con trabajo en curso
+  y colapsa al terminar. Verificado: pasos con descripción + timestamps ("hace 0s").
+
+**P4 — FocusModalView** — aparece, input inline con auto-foco, footer modelo/tokens/coste,
+vibrancy. Verificado abriéndolo con ⌘⌥Space y por status bar.
+
+**P5 — InlineView (antes inalcanzable)**
+- Bug: `uiState = .inline` solo se asignaba dentro de `AppContextDetector` y **solo si ya
+  estaba en inline** → nunca se entraba. Fix: nuevo tipo `inline`/`sugerencia` en
+  `applyUpdate` que ancla la sugerencia a la app activa. Verificado: variante VSCode en
+  bottom-center con botones Aplicar/Ignorar (auto-dismiss 8s en código).
+
+**P6 — ConfirmationCard**
+- Bug: al llegar una confirmación con el overlay en reposo, `applyConfirmation` marcaba
+  `focusModalShown=true` pero no ponía `uiState=.focusModal` → el modal (y la tarjeta) nunca
+  se abría. Fix aplicado. Verificado: cabecera "CONFIRMAR ACCIÓN DESTRUCTIVA", comando
+  monospace, "Ver 4 elementos", barra de expiración, botones Cancelar/A la papelera/Eliminar.
+
+**P7 — Error / desconexión**
+- Bug: `isDisconnected` se asignaba pero **nunca se leía** en ninguna vista → sin banner ni
+  notch rojo. Fix: el notch (elemento persistente) muestra rojo + "Sin conexión ·
+  reconectando…" cuando `isDisconnected`; `onLongDisconnect`/`onConnectionChange` refrescan
+  el notch. Verificado matando el backend (rojo) y reiniciándolo (vuelve a normal).
+
+**P8 — Onboarding** — 3 pasos en primer arranque. Verificado reseteando
+`UserDefaults jarvis.onboardingCompleted`; se cierra tras completar los 3 pasos.
+
+**Backend**
+- `interface/api.py`: endpoint DEBUG `/debug/inject/{frame}` (frames: thinking, acting, done,
+  error, inline, confirm) — solo activo con `JARVIS_DEBUG_OVERLAY=1`, si no → 404. Requiere token.
+
+**ADRs**
+- **ADR-D1** (tamaño notch): colapsado iguala el notch físico (200×32) para no quedar oculto.
+- **ADR-D2** (curvas): apertura `.bouncy(0.4)`, cierre `.smooth(0.4)` (DNK/boring.notch).
+- **ADR-D3** (radios): cerrado 6/14, abierto 6/20.
+- **ADR-D4** (hotkey): Carbon `RegisterEventHotKey` en vez de CGEventTap/NSEvent (independiente
+  de Accesibilidad); desactivar symbolic hotkey 65 en runtime para liberar ⌘⌥Space.
+- **ADR-D5** (notch persistente): el notch se refresca en cada sync y refleja siempre la fase;
+  edge log/inline/modal son capas adicionales.
+- **ADR-D6** (edge log): expandido mientras hay paso activo; anclado al borde derecho.
+
+### Runtime de calidad montado + agente probado e2e (2026-07-01)
+
+- **Docker/ChromaDB operativo** — `docker compose up -d chromadb` levanta el contenedor `jarvis-chromadb` (heartbeat 200 en `localhost:8000`). El cliente `chromadb.HttpClient` conecta, add/get/delete verificados.
+- **`docker-compose.yml`** — El bind-mount `./data/chromadb` fallaba con `operation not permitted`: macOS TCC bloquea a Docker Desktop el acceso a `~/Documents` (carpeta protegida). Migrado a **volumen nombrado** `jarvis-chromadb-data` — reproducible y sin depender de permisos TCC.
+- **Backend completo arranca** (`python main.py`): stack de seguridad, 5 skills, 7 servidores MCP, 4 colecciones ChromaDB creadas (`jarvis_memory`, `jarvis_workflows`, `jarvis_episodic`, `jarvis_instructions`), embeddings Ollama `nomic-embed-text` OK. `MemorySystem.health_check` → `degraded` solo por latencia en frío (870 ms) y vault 1Password ausente.
+- **Agente e2e probado** — `POST /chat` → SSE `thinking → done`, interacción persistida en ChromaDB. Toda la tubería (router → modelo → planner → loop → memoria → stream) funciona.
+- **`models/ollama_client.py`** — Añadido `qwen2.5:3b: 2.5` a `RAM_APROXIMADA_GB` (antes usaba el default conservador de 4.0 GB y descartaba el modelo sin evaluarlo).
+- **[BLOQUEANTE de calidad — CONFIRMADO por prueba] Ningún modelo viable en esta máquina con Docker corriendo:**
+  - Cloud: Kimi K2.6 → **429** (rate limit/free tier), DeepSeek V3.2 → **402** (sin saldo), OpenRouter → **401** (key inválida). Los tres requieren acción del usuario (esperar reset / saldo / key nueva).
+  - Local: Docker reserva ~3.8 GB del VM (auto-gestión en Apple Silicon) → **solo ~1 GB de RAM libre en el host** de los 8.6 GB, incluso con el backend parado.
+    - `qwen2.5:3b` (2.2 GB reales, **sí capaz** de planear) → **no cabe**; el guard de RAM cae a `qwen2.5:0.5b`.
+    - `qwen2.5:1.5b` y `qwen2.5:0.5b` (sí caben) → **incapaces de generar el JSON del planner**; caen a `pedir_aclaracion` y el runaway guard aborta (comportamiento correcto del pipeline).
+  - **Intento descartado:** fijar `MemoryMiB=2048` en Docker Desktop para liberar host → el VM no arrancó (`no route to host` a 192.168.65.7:2376). Revertido a auto-gestión. No forzar la RAM del VM por CLI en esta máquina.
+  - **Conclusión:** el pipeline (router→modelo→planner→loop→memoria→stream) funciona e2e; el runtime de calidad está montado. Para un **agente útil** hace falta un modelo capaz, y en 8 GB con Docker la vía realista es **cloud** (Kimi K2.6 es el primario gratuito del diseño). El 3B local solo es viable liberando RAM (cerrar apps pesadas) o bajando el footprint de Docker de forma estable.
+  - `.env` queda con `OLLAMA_MODEL_*=qwen2.5:3b` (objetivo capaz; el guard de RAM protege el arranque cayendo a modelos menores si no hay memoria).
+
 ### SwiftUI UX — overlay completo P1–P8 (2026-05-20)
 
 **P1 — Hotkey ⌘⌥Space**

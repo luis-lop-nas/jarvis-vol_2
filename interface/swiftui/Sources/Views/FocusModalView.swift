@@ -11,6 +11,7 @@ struct FocusModalView: View {
     let onConfirm: (String, Bool) -> Void
 
     @State private var replyText: String = ""
+    @FocusState private var replyFocused: Bool
 
     private let bg = Color(red: 0.05, green: 0.05, blue: 0.06)
     private let blue = Color(red: 0.22, green: 0.54, blue: 0.87)
@@ -57,6 +58,11 @@ struct FocusModalView: View {
                 insertion: .move(edge: .top).combined(with: .opacity),
                 removal: .opacity.animation(.easeOut(duration: 0.15))
             ))
+        }
+        .onAppear {
+            // Auto-foco del input al abrir el modal (⌘⌥Space → escribir ya).
+            // Pequeño delay para que la ventana sea key antes de pedir el foco.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { replyFocused = true }
         }
         .onKeyPress(.escape) { onClose(); return .handled }
         .onKeyPress(.return, phases: .down) { event in
@@ -196,6 +202,7 @@ struct FocusModalView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .foregroundStyle(.white)
+                .focused($replyFocused)
                 .onSubmit { _sendReply() }
 
             if !replyText.isEmpty {

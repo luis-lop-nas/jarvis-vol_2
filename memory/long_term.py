@@ -60,15 +60,28 @@ class LongTermMemory:
         self._cliente: ClientAPI | None = None
         self._coleccion: Collection | None = None
         try:
-            self._cliente = chromadb.HttpClient(
-                host=settings.chroma_host,
-                port=settings.chroma_port,
-            )
+            if settings.chroma_mode == "docker":
+                # Servidor ChromaDB en Docker (HTTP). Consume ~3.8 GB del VM.
+                self._cliente = chromadb.HttpClient(
+                    host=settings.chroma_host,
+                    port=settings.chroma_port,
+                )
+            else:
+                # Modo local embebido: sin Docker, persiste en disco. Libera la
+                # RAM del VM para que quepa un modelo local capaz (el cerebro).
+                settings.chromadb_path.mkdir(parents=True, exist_ok=True)
+                self._cliente = chromadb.PersistentClient(
+                    path=str(settings.chromadb_path),
+                )
             self._coleccion = self._cliente.get_or_create_collection(
                 name=self._collection_name,
                 metadata={"hnsw:space": "cosine"},
             )
-            log.info("Colección ChromaDB lista: %s", self._collection_name)
+            log.info(
+                "Colección ChromaDB lista (%s): %s",
+                settings.chroma_mode,
+                self._collection_name,
+            )
         except Exception as exc:
             log.warning("ChromaDB no disponible para %s: %s", self._collection_name, exc)
         self._embeddings = embeddings or EmbeddingsClient()
