@@ -30,6 +30,7 @@ from models.base import (
     StreamChunk,
 )
 from models.deepseek import DeepSeekModel
+from models.gemini import GeminiModel
 from models.kimi import KimiModel
 from models.ollama_client import OllamaModel
 from models.openrouter import OpenRouterModel
@@ -71,7 +72,9 @@ def _transport_chat(contenido: str = "ok") -> httpx.MockTransport:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("clase", [KimiModel, DeepSeekModel, OllamaModel, OpenRouterModel])
+@pytest.mark.parametrize(
+    "clase", [KimiModel, DeepSeekModel, GeminiModel, OllamaModel, OpenRouterModel]
+)
 def test_implementan_base_model(clase: type[BaseModel]) -> None:
     assert issubclass(clase, BaseModel)
     for metodo in ("complete", "stream", "health_check"):
@@ -90,7 +93,7 @@ def test_capabilities_se_declaran() -> None:
 
 
 def test_stream_es_async_generator() -> None:
-    for clase in (KimiModel, DeepSeekModel, OllamaModel, OpenRouterModel):
+    for clase in (KimiModel, DeepSeekModel, GeminiModel, OllamaModel, OpenRouterModel):
         # `stream` está declarado en BaseModel; la implementación concreta
         # debe ser una función generadora async.
         impl = clase.stream
@@ -130,6 +133,25 @@ async def test_kimi_complete_usa_cache_en_segunda_llamada() -> None:
     assert primera.cached is False
     assert segunda.cached is True
     await kimi.cerrar()
+
+
+async def test_gemini_complete_devuelve_model_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_respuesta_chat("hola", modelo="gemini-2.5-flash"))
+
+    cliente_http = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://x")
+    gemini = GeminiModel(cliente=cliente_http)
+    resp = await gemini.complete([Mensaje(rol="user", contenido="hola")])
+    assert isinstance(resp, ModelResponse)
+    assert resp.content == "hola"
+    assert resp.model == "gemini-2.5-flash"
+    await gemini.cerrar()
+
+
+def test_gemini_declara_vision_y_tool_use() -> None:
+    gemini = GeminiModel(cliente=httpx.AsyncClient(transport=_transport_chat()))
+    assert gemini.soporta(ModelCapability.VISION)
+    assert gemini.soporta(ModelCapability.TOOL_USE)
 
 
 async def test_deepseek_complete_calcula_coste_y_cached() -> None:
@@ -193,6 +215,49 @@ async def test_kimi_reintenta_en_429() -> None:
     assert resp.content == "ok"
     assert intentos["n"] == 3
     await kimi.cerrar()
+
+
+def test_retry_after_segundos_parsea_entero() -> None:
+    resp = httpx.Response(429, headers={"Retry-After": "12"})
+    assert RetryPolicy._retry_after_segundos(resp) == 12.0
+    assert RetryPolicy._retry_after_segundos(httpx.Response(429)) is None
+
+
+async def test_retry_respeta_retry_after_en_429() -> None:
+    import time as _t
+
+    intentos = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        intentos["n"] += 1
+        if intentos["n"] < 2:
+            return httpx.Response(429, headers={"Retry-After": "1"}, json={"error": "rate"})
+        return httpx.Response(200, json=_respuesta_chat("ok"))
+
+    cliente_http = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://x")
+    gemini = GeminiModel(cliente=cliente_http)
+    gemini._min_interval = 0.0  # aislar el efecto del Retry-After  # noqa: SLF001
+    t0 = _t.monotonic()
+    resp = await gemini.complete([Mensaje(rol="user", contenido="hola")])
+    transcurrido = _t.monotonic() - t0
+    assert resp.content == "ok"
+    assert intentos["n"] == 2
+    # Debe haber esperado ~1s (el Retry-After), no el backoff por defecto.
+    assert transcurrido >= 1.0
+    await gemini.cerrar()
+
+
+async def test_gemini_throttle_espacia_llamadas() -> None:
+    import time as _t
+
+    cliente_http = httpx.AsyncClient(transport=_transport_chat("ok"), base_url="http://x")
+    gemini = GeminiModel(cliente=cliente_http)
+    gemini._min_interval = 0.3  # noqa: SLF001
+    await gemini.complete([Mensaje(rol="user", contenido="a")])
+    t0 = _t.monotonic()
+    await gemini.complete([Mensaje(rol="user", contenido="b")])
+    assert _t.monotonic() - t0 >= 0.3
+    await gemini.cerrar()
 
 
 async def test_retry_se_rinde_tras_max_intentos() -> None:
@@ -514,6 +579,18 @@ class TestCostesModelos:
         resp = await model.complete([Mensaje(rol="user", contenido="test")])
         # 1000 * 0.15 / 1e6 + 500 * 0.15 / 1e6 = 0.000225
         assert resp.cost_usd == pytest.approx(0.000225, rel=1e-3)
+
+    async def test_gemini_calcula_coste(self) -> None:
+        cuerpo = {
+            "id": "x",
+            "model": "gemini-2.5-flash",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 500},
+        }
+        model = GeminiModel(cliente=self._cliente(cuerpo))
+        resp = await model.complete([Mensaje(rol="user", contenido="test")])
+        # 1000 * 0.30 / 1e6 + 500 * 2.50 / 1e6 = 0.0003 + 0.00125 = 0.00155
+        assert resp.cost_usd == pytest.approx(0.00155, rel=1e-3)
 
     async def test_openrouter_usa_usage_cost(self) -> None:
         cuerpo = {

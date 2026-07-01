@@ -3,11 +3,12 @@
 Reglas en orden de prioridad (cortocircuito en cuanto una se cumple):
 1. Datos sensibles detectados → local (siempre, sin excepción).
 2. Sin internet → local.
-3. Necesita visión → Kimi (`KIMI_MODEL_DEFAULT`).
-4. Tarea compleja + código → Kimi.
+3. Necesita visión → Gemini Flash (`GEMINI_MODEL_DEFAULT`), multimodal y disponible.
+4. Tarea compleja + código → Gemini Flash.
 5. Embeddings / clasificación → local (`OLLAMA_MODEL_EMBED`).
-6. Tarea media o conversacional → DeepSeek (`DEEPSEEK_MODEL_DEFAULT`).
-7. Default → DeepSeek.
+6. Razonamiento profundo (tarea compleja) → Gemini Flash.
+7. Tarea media o conversacional → DeepSeek (`DEEPSEEK_MODEL_DEFAULT`).
+8. Default → DeepSeek.
 
 Cada decisión se loggea (si `ROUTER_LOG_DECISIONS=true`) con:
 tarea resumida, modelo elegido, razón y tiempo de la decisión.
@@ -28,6 +29,7 @@ from config import settings
 from models._common import CircuitBreaker
 from models.base import BaseModel, Mensaje
 from models.deepseek import DeepSeekModel
+from models.gemini import GeminiModel
 from models.kimi import KimiModel
 from models.ollama_client import OllamaModel
 from models.openrouter import OpenRouterModel
@@ -91,6 +93,7 @@ class ModeloDestino(StrEnum):
     KIMI_THINKING = "kimi_thinking"
     DEEPSEEK = "deepseek"
     DEEPSEEK_REASONER = "deepseek_reasoner"
+    GEMINI = "gemini"
     OPENROUTER = "openrouter"
 
 
@@ -229,19 +232,19 @@ class ModelRouter:
         if self._coincide(tarea, VISION_KEYWORDS) or any(
             m.imagenes_base64 for m in contexto.mensajes
         ):
-            return ModeloDestino.KIMI, "vision_requerida"
+            return ModeloDestino.GEMINI, "vision_requerida"
 
         es_codigo = self._coincide(tarea, CODIGO_KEYWORDS)
         es_complejo = complejidad >= 0.6 or self._coincide(tarea, COMPLEJIDAD_ALTA)
 
         if es_codigo and es_complejo:
-            return ModeloDestino.KIMI, "tarea_compleja_codigo"
+            return ModeloDestino.GEMINI, "tarea_compleja_codigo"
 
         if self._coincide(tarea, EMBEDDING_KEYWORDS):
             return ModeloDestino.LOCAL_EMBED, "embeddings_clasificacion"
 
         if es_complejo:
-            return ModeloDestino.DEEPSEEK_REASONER, "razonamiento_profundo"
+            return ModeloDestino.GEMINI, "razonamiento_profundo"
 
         return ModeloDestino.DEEPSEEK, "default_conversacional"
 
@@ -316,17 +319,26 @@ class ModelRouter:
             case ModeloDestino.KIMI | ModeloDestino.KIMI_THINKING:
                 return [
                     ModeloDestino.DEEPSEEK,
+                    ModeloDestino.GEMINI,
                     ModeloDestino.OPENROUTER,
                     ModeloDestino.LOCAL_DEFAULT,
                 ]
             case ModeloDestino.DEEPSEEK | ModeloDestino.DEEPSEEK_REASONER:
                 return [
                     ModeloDestino.KIMI,
+                    ModeloDestino.GEMINI,
+                    ModeloDestino.OPENROUTER,
+                    ModeloDestino.LOCAL_DEFAULT,
+                ]
+            case ModeloDestino.GEMINI:
+                return [
+                    ModeloDestino.KIMI,
+                    ModeloDestino.DEEPSEEK,
                     ModeloDestino.OPENROUTER,
                     ModeloDestino.LOCAL_DEFAULT,
                 ]
             case ModeloDestino.OPENROUTER:
-                return [ModeloDestino.LOCAL_DEFAULT]
+                return [ModeloDestino.GEMINI, ModeloDestino.LOCAL_DEFAULT]
             case ModeloDestino.LOCAL_DEFAULT:
                 return [ModeloDestino.LOCAL_REASONING]
             case ModeloDestino.LOCAL_CODE:
@@ -360,6 +372,8 @@ class ModelRouter:
                 return DeepSeekModel()
             case ModeloDestino.DEEPSEEK_REASONER:
                 return DeepSeekModel(modelo=settings.deepseek_model_reasoner)
+            case ModeloDestino.GEMINI:
+                return GeminiModel()
             case ModeloDestino.OPENROUTER:
                 return OpenRouterModel()
             case ModeloDestino.LOCAL_DEFAULT:

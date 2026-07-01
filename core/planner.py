@@ -12,6 +12,7 @@ import orjson
 from pydantic import BaseModel as _PBase
 from pydantic import Field
 
+from config import settings
 from models.base import BaseModel as _ModelBase
 from models.base import Mensaje
 
@@ -126,6 +127,28 @@ class Planner:
             return _HERRAMIENTAS_CONFIRMACION | self._skill_registry.herramientas_confirmacion()
         return _HERRAMIENTAS_CONFIRMACION
 
+    @staticmethod
+    def _bloque_rutas() -> str:
+        """Bloque de rutas absolutas reales para anclar los planes de filesystem.
+
+        Se inyecta en el prompt del usuario para que el modelo use estas rutas en
+        vez de inventar ``~/archivo``. Si el usuario no da una ruta explícita, el
+        directorio de trabajo actual es el punto de partida.
+
+        Ejemplo::
+            "Rutas del sistema" in Planner._bloque_rutas()
+            True
+        """
+        rutas = settings.rutas_clave()
+        if not rutas:
+            return ""
+        lineas = "\n".join(f"- {nombre}: {ruta}" for nombre, ruta in rutas.items())
+        return (
+            "\n\nRutas del sistema (usa SIEMPRE rutas absolutas de esta lista; "
+            "NO inventes rutas tipo ~/archivo). Si la tarea no especifica ubicación, "
+            "asume 'directorio_actual':\n" + lineas
+        )
+
     async def plan(
         self,
         tarea: str,
@@ -139,10 +162,11 @@ class Planner:
         """
         ctx = f"\n\nContexto:\n{orjson.dumps(contexto, default=str).decode()}" if contexto else ""
         herr = f"\n\nHerramientas: {', '.join(herramientas)}" if herramientas else ""
+        rutas = self._bloque_rutas()
 
         mensajes: list[Mensaje] = [
             Mensaje(rol="system", contenido=self._prompt_sistema),
-            Mensaje(rol="user", contenido=f"Tarea:\n{tarea}{ctx}{herr}"),
+            Mensaje(rol="user", contenido=f"Tarea:\n{tarea}{rutas}{ctx}{herr}"),
         ]
         respuesta = await self._modelo.complete(mensajes, temperatura=0.2, max_tokens=2048)
         # Patrón Instructor: si el JSON es inválido, devuelve un plan de aclaración
@@ -163,6 +187,7 @@ class Planner:
                     )},
                 )],
             )
+        plan = self._normalizar_confirmaciones(plan)
         return plan.model_copy(update={
             "tarea": tarea,
             "modelo_usado": respuesta.model,
@@ -200,11 +225,32 @@ class Planner:
             max_tokens=2048,
         )
         nuevo = self._parsear(respuesta.content)
+        nuevo = self._normalizar_confirmaciones(nuevo)
         return nuevo.model_copy(update={
             "tarea": plan.tarea,
             "modelo_usado": respuesta.model,
             "duracion_total_ms": sum(p.duracion_estimada_ms for p in nuevo.pasos),
         })
+
+    def _normalizar_confirmaciones(self, plan: PlanEjecucion) -> PlanEjecucion:
+        """Fuerza `requiere_confirmacion=True` en herramientas que la exigen.
+
+        Defensa en profundidad: la confirmación NO puede depender de que el modelo
+        acierte el flag. Cualquier paso cuya herramienta esté en el set de
+        confirmación se marca como tal aunque el modelo lo omitiera, de modo que el
+        gate de confirmación del agente siempre se dispara.
+
+        Ejemplo::
+            plan = planner._normalizar_confirmaciones(plan)
+        """
+        confirmables = self._herramientas_confirmacion()
+        pasos = [
+            p.model_copy(update={"requiere_confirmacion": True})
+            if p.herramienta in confirmables and not p.requiere_confirmacion
+            else p
+            for p in plan.pasos
+        ]
+        return plan.model_copy(update={"pasos": pasos})
 
     def validate_plan(self, plan: PlanEjecucion) -> list[str]:
         """Verifica la consistencia del plan. Devuelve lista de errores encontrados.

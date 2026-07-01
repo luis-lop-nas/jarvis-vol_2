@@ -18,6 +18,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC
 from enum import StrEnum
 from typing import Any, TypeVar
 
@@ -49,11 +50,18 @@ class RetryPolicy:
     base_segundos: float = 1.0
     factor: float = 2.0
     max_segundos: float = 30.0
+    max_retry_after_s: float = 60.0
 
     async def ejecutar(self, fn: Callable[[], Awaitable[T]]) -> T:
-        """Ejecuta `fn` aplicando reintentos sobre errores transitorios."""
+        """Ejecuta `fn` aplicando reintentos sobre errores transitorios.
+
+        En 429 respeta el header `Retry-After` si el servidor lo envía (evita
+        martillear un rate limit y aprovecha la espera exacta que pide la API),
+        acotado por `max_retry_after_s`. En 5xx usa backoff exponencial + jitter.
+        """
         ultimo_error: Exception | None = None
         for intento in range(1, self.max_intentos + 1):
+            retry_after: float | None = None
             try:
                 return await fn()
             except httpx.HTTPStatusError as exc:
@@ -61,25 +69,63 @@ class RetryPolicy:
                 if codigo not in (429, 500, 502, 503, 504) or intento == self.max_intentos:
                     raise
                 ultimo_error = exc
+                if codigo == 429:
+                    retry_after = self._retry_after_segundos(exc.response)
             except (TimeoutError, httpx.TransportError) as exc:
                 if intento == self.max_intentos:
                     raise
                 ultimo_error = exc
 
-            espera = min(
-                self.max_segundos,
-                self.base_segundos * (self.factor ** (intento - 1)),
-            ) + random.uniform(0, 0.3)
+            if retry_after is not None:
+                espera = min(self.max_retry_after_s, retry_after) + random.uniform(0, 0.3)
+            else:
+                espera = min(
+                    self.max_segundos,
+                    self.base_segundos * (self.factor ** (intento - 1)),
+                ) + random.uniform(0, 0.3)
             log.warning(
-                "Reintento %d/%d tras %.2fs (%s)",
+                "Reintento %d/%d tras %.2fs%s (%s)",
                 intento,
                 self.max_intentos,
                 espera,
+                " [Retry-After]" if retry_after is not None else "",
                 ultimo_error,
             )
             await asyncio.sleep(espera)
 
         raise RuntimeError("ejecutar() llegó a un estado imposible")
+
+    @staticmethod
+    def _retry_after_segundos(respuesta: httpx.Response) -> float | None:
+        """Interpreta el header `Retry-After` (segundos o fecha HTTP) → segundos.
+
+        Devuelve `None` si el header falta o no es interpretable.
+
+        Ejemplo:
+            >>> import httpx
+            >>> r = httpx.Response(429, headers={"Retry-After": "12"})
+            >>> RetryPolicy._retry_after_segundos(r)
+            12.0
+        """
+        valor = respuesta.headers.get("Retry-After")
+        if not valor:
+            return None
+        valor = valor.strip()
+        if valor.isdigit():
+            return float(valor)
+        try:
+            from email.utils import parsedate_to_datetime
+
+            objetivo = parsedate_to_datetime(valor)
+        except (TypeError, ValueError):
+            return None
+        if objetivo is None:
+            return None
+        from datetime import datetime
+
+        ahora = datetime.now(objetivo.tzinfo or UTC)
+        delta = (objetivo - ahora).total_seconds()
+        return max(0.0, delta)
 
 
 # ---------------------------------------------------------------------------

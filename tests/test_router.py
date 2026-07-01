@@ -97,32 +97,32 @@ def test_sin_internet_va_a_local() -> None:
         "captura la ventana activa",
     ],
 )
-def test_keywords_vision_van_a_kimi(tarea: str) -> None:
+def test_keywords_vision_van_a_gemini(tarea: str) -> None:
     router = ModelRouter()
     seleccion = router.route(
         tarea,
         ContextoRuteo(mensajes=[Mensaje(rol="user", contenido=tarea)], sin_internet=False),
     )
-    assert seleccion.model_name == ModeloDestino.KIMI
+    assert seleccion.model_name == ModeloDestino.GEMINI
     assert seleccion.razon == "vision_requerida"
 
 
-def test_imagen_adjunta_va_a_kimi() -> None:
+def test_imagen_adjunta_va_a_gemini() -> None:
     router = ModelRouter()
     contexto = ContextoRuteo(
         mensajes=[Mensaje(rol="user", contenido="describe", imagenes_base64=["AAA"])],
         sin_internet=False,
     )
     seleccion = router.route("describe", contexto)
-    assert seleccion.model_name == ModeloDestino.KIMI
+    assert seleccion.model_name == ModeloDestino.GEMINI
 
 
 # ---------------------------------------------------------------------------
-# 5. Compleja + código → KIMI
+# 5. Compleja + código → GEMINI
 # ---------------------------------------------------------------------------
 
 
-def test_compleja_con_codigo_va_a_kimi() -> None:
+def test_compleja_con_codigo_va_a_gemini() -> None:
     router = ModelRouter()
     tarea = (
         "Implementa una función Python que refactorice este código y "
@@ -132,8 +132,19 @@ def test_compleja_con_codigo_va_a_kimi() -> None:
         tarea,
         ContextoRuteo(mensajes=[Mensaje(rol="user", contenido=tarea)], sin_internet=False),
     )
-    assert seleccion.model_name == ModeloDestino.KIMI
+    assert seleccion.model_name == ModeloDestino.GEMINI
     assert seleccion.razon == "tarea_compleja_codigo"
+
+
+def test_razonamiento_profundo_va_a_gemini() -> None:
+    router = ModelRouter()
+    tarea = "Analiza y planifica la arquitectura completa del sistema de facturación."
+    seleccion = router.route(
+        tarea,
+        ContextoRuteo(mensajes=[Mensaje(rol="user", contenido=tarea)], sin_internet=False),
+    )
+    assert seleccion.model_name == ModeloDestino.GEMINI
+    assert seleccion.razon == "razonamiento_profundo"
 
 
 # ---------------------------------------------------------------------------
@@ -177,19 +188,33 @@ def test_default_es_deepseek(tarea: str) -> None:
 
 def test_fallback_kimi_va_a_deepseek_y_openrouter() -> None:
     router = ModelRouter()
-    seleccion = router.route(
-        "describe la pantalla",
-        ContextoRuteo(
-            mensajes=[Mensaje(rol="user", contenido="describe la pantalla")],
-            sin_internet=False,
-        ),
-    )
-    assert seleccion.model_name == ModeloDestino.KIMI
-    assert seleccion.fallback_chain == [
+    # Kimi ya no es destino primario (solo fallback); comprobamos su cadena directamente.
+    cadena = router._fallback_para(ModeloDestino.KIMI)  # noqa: SLF001
+    assert cadena == [
+        ModeloDestino.DEEPSEEK,
+        ModeloDestino.GEMINI,
+        ModeloDestino.OPENROUTER,
+        ModeloDestino.LOCAL_DEFAULT,
+    ]
+
+
+def test_fallback_gemini_incluye_kimi_para_vision() -> None:
+    router = ModelRouter()
+    cadena = router._fallback_para(ModeloDestino.GEMINI)  # noqa: SLF001
+    assert cadena == [
+        ModeloDestino.KIMI,
         ModeloDestino.DEEPSEEK,
         ModeloDestino.OPENROUTER,
         ModeloDestino.LOCAL_DEFAULT,
     ]
+
+
+def test_construye_cliente_gemini() -> None:
+    from models.gemini import GeminiModel
+
+    router = ModelRouter()
+    cliente = router.obtener_cliente(ModeloDestino.GEMINI)
+    assert isinstance(cliente, GeminiModel)
 
 
 def test_fallback_deepseek_va_a_kimi_y_openrouter() -> None:
@@ -280,11 +305,11 @@ class TestCircuitBreakerRouter:
 
     def test_escala_a_fallback_cuando_circuito_abierto(self) -> None:
         router = ModelRouter()
-        # Abrir el circuito de Kimi con 3 fallos
+        # Abrir el circuito de Gemini con 3 fallos
         for _ in range(3):
-            router.registrar_fallo_modelo(ModeloDestino.KIMI)
+            router.registrar_fallo_modelo(ModeloDestino.GEMINI)
 
-        # Una tarea que normalmente iría a Kimi (visión)
+        # Una tarea que normalmente iría a Gemini (visión)
         sel = router.route(
             "mira la pantalla y dime qué ves",
             ContextoRuteo(
@@ -292,8 +317,8 @@ class TestCircuitBreakerRouter:
                 sin_internet=False,
             ),
         )
-        # Debe haber escalado al primer fallback (DeepSeek) en lugar de Kimi
-        assert sel.model_name != ModeloDestino.KIMI
+        # Debe haber escalado al primer fallback (Kimi) en lugar de Gemini
+        assert sel.model_name != ModeloDestino.GEMINI
         assert sel.circuit_open is True
         assert "circuit_open" in sel.razon
 
@@ -327,3 +352,88 @@ class TestCostesRouter:
         router = ModelRouter()
         router.registrar_coste(1.5)
         assert router.total_cost_usd == pytest.approx(1.5)
+
+
+# ---------------------------------------------------------------------------
+# RoutedModel — enrutado per-request + fallback en caliente (Goal 4)
+# ---------------------------------------------------------------------------
+
+
+import time as _time
+
+import httpx
+
+from core.routed_model import RoutedModel
+from models.base import BaseModel, ModelConfig, ModelResponse, StreamChunk
+
+
+def _error_429() -> httpx.HTTPStatusError:
+    req = httpx.Request("POST", "http://x/chat/completions")
+    resp = httpx.Response(429, request=req)
+    return httpx.HTTPStatusError("rate limit", request=req, response=resp)
+
+
+class _FakeModel(BaseModel):
+    def __init__(self, nombre: str, *, fallo: Exception | None = None) -> None:
+        super().__init__(ModelConfig(name=nombre))
+        self._fallo = fallo
+
+    async def complete(self, mensajes, **kwargs) -> ModelResponse:  # type: ignore[override]
+        if self._fallo is not None:
+            raise self._fallo
+        return ModelResponse(content=f"resp-{self.config.name}", model=self.config.name, cost_usd=0.001)
+
+    async def stream(self, mensajes, **kwargs):  # type: ignore[override]
+        if self._fallo is not None:
+            raise self._fallo
+        yield StreamChunk(content=f"resp-{self.config.name}", model=self.config.name)
+
+    async def health_check(self) -> bool:
+        return self._fallo is None
+
+
+def _router_con_internet(clientes: dict) -> ModelRouter:
+    router = ModelRouter(clientes=clientes)
+    router._cache_internet = (_time.monotonic(), True)  # type: ignore[attr-defined]
+    return router
+
+
+class TestRoutedModel:
+    async def test_usa_modelo_primario_si_responde(self) -> None:
+        # "hola" → DEEPSEEK primario
+        router = _router_con_internet({ModeloDestino.DEEPSEEK: _FakeModel("deepseek")})
+        rm = RoutedModel(router)
+        resp = await rm.complete([Mensaje(rol="user", contenido="hola")])
+        assert resp.model == "deepseek"
+        assert router.total_cost_usd == pytest.approx(0.001)
+
+    async def test_fallback_en_caliente_ante_429(self) -> None:
+        # DEEPSEEK (primario) cae con 429 → escala a KIMI (primer fallback)
+        router = _router_con_internet({
+            ModeloDestino.DEEPSEEK: _FakeModel("deepseek", fallo=_error_429()),
+            ModeloDestino.KIMI: _FakeModel("kimi"),
+        })
+        rm = RoutedModel(router)
+        resp = await rm.complete([Mensaje(rol="user", contenido="hola")])
+        assert resp.model == "kimi"
+        # El circuit breaker de DeepSeek registró el fallo.
+        router.registrar_fallo_modelo(ModeloDestino.DEEPSEEK)
+        router.registrar_fallo_modelo(ModeloDestino.DEEPSEEK)
+        assert router._circuito(ModeloDestino.DEEPSEEK).is_open() is True  # type: ignore[attr-defined]
+
+    async def test_error_no_transitorio_propaga(self) -> None:
+        router = _router_con_internet({
+            ModeloDestino.DEEPSEEK: _FakeModel("deepseek", fallo=ValueError("bug")),
+        })
+        rm = RoutedModel(router)
+        with pytest.raises(ValueError, match="bug"):
+            await rm.complete([Mensaje(rol="user", contenido="hola")])
+
+    async def test_stream_fallback_antes_del_primer_chunk(self) -> None:
+        router = _router_con_internet({
+            ModeloDestino.DEEPSEEK: _FakeModel("deepseek", fallo=_error_429()),
+            ModeloDestino.KIMI: _FakeModel("kimi"),
+        })
+        rm = RoutedModel(router)
+        chunks = [c async for c in rm.stream([Mensaje(rol="user", contenido="hola")])]
+        assert chunks and chunks[0].model == "kimi"

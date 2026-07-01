@@ -47,30 +47,26 @@ final class WindowManager {
 
     // MARK: - Notch window (statusBar level, top-center)
 
+    // El notch es PERSISTENTE: se crea una sola vez con una vista que observa el
+    // estado (@Observable). No se recrea en cada actualización — así SwiftUI anima
+    // los cambios de modo (closed↔live↔expanded) dentro del mismo árbol de vistas
+    // en lugar de reiniciar la animación al reemplazar el NSHostingView.
     func showNotch<V: View>(content: V) {
+        if notchWindow != nil {
+            notchWindow?.orderFront(nil)
+            return
+        }
         let screen = NSScreen.main ?? NSScreen.screens[0]
         let screenFrame = screen.frame
-        // La ventana usa el tamaño expandido (340×44); el NotchView anima colapsado↔expandido dentro.
-        let width: CGFloat = 340
-        let height: CGFloat = 44
+        // Contenedor amplio anclado al borde superior; el island anima su tamaño
+        // dentro. El área transparente no captura clics (hit-test de SwiftUI).
+        let width = NotchMetrics.windowWidth
+        let height = NotchMetrics.windowHeight
         let x = screenFrame.midX - width / 2
         let y = screenFrame.maxY - height
         let frame = NSRect(x: x, y: y, width: width, height: height)
 
-        // Reutilizar la ventana existente para evitar apilar/gotear ventanas al
-        // refrescar el notch en cada actualización (P2: notch siempre visible).
-        if let existing = notchWindow {
-            existing.setFrame(frame, display: false)
-            existing.contentView = NSHostingView(rootView: content)
-            existing.orderFront(nil)
-            return
-        }
-
-        notchWindow = _makeWindow(
-            frame: frame,
-            level: .statusBar,
-            content: content
-        )
+        notchWindow = _makeWindow(frame: frame, level: .statusBar, content: content)
         notchWindow?.orderFront(nil)
     }
 

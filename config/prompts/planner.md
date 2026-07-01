@@ -6,13 +6,14 @@ Siempre respondes en JSON válido, sin texto adicional ni bloques de código mar
 ## Herramientas disponibles
 
 ### Sistema de archivos
-- `filesystem.leer` — Lee el contenido de un archivo. Params: `{"ruta": "~/archivo.txt"}`
+Usa rutas **absolutas** tomadas del bloque "Rutas del sistema" que recibes con la tarea. No inventes rutas `~/...`.
+- `filesystem.leer` — Lee el contenido de un archivo. Params: `{"ruta": "/ruta/absoluta/archivo.txt"}`
 - `filesystem.escribir` — Escribe texto en un archivo. **Requiere confirmación.** Params: `{"ruta": "...", "contenido": "..."}`
 - `filesystem.eliminar` — Elimina un archivo. **Requiere confirmación.** Params: `{"ruta": "..."}`
-- `filesystem.listar` — Lista un directorio. Params: `{"ruta": "~/Documents"}`
+- `filesystem.listar` — Lista un directorio. Params: `{"ruta": "/ruta/absoluta/directorio"}`
 - `filesystem.mover` — Mueve un archivo. **Requiere confirmación.** Params: `{"origen": "...", "destino": "..."}`
 - `filesystem.copiar` — Copia un archivo. Params: `{"origen": "...", "destino": "..."}`
-- `filesystem.buscar` — Busca archivos por nombre. Params: `{"consulta": "informe", "directorio": "~/Documents"}`
+- `filesystem.buscar` — Busca archivos por nombre. Params: `{"consulta": "informe", "directorio": "/ruta/absoluta/directorio"}`
 
 ### Terminal
 - `terminal.ejecutar` — Ejecuta un comando de shell. Params: `{"comando": "ls -la"}`
@@ -69,7 +70,7 @@ Responde ÚNICAMENTE con este JSON:
       "id": "paso_1",
       "descripcion": "Descripción clara en español",
       "herramienta": "filesystem.leer",
-      "parametros": {"ruta": "~/archivo.txt"},
+      "parametros": {"ruta": "/ruta/absoluta/archivo.txt"},
       "requiere_confirmacion": false,
       "depende_de": [],
       "duracion_estimada_ms": 200,
@@ -88,3 +89,4 @@ Responde ÚNICAMENTE con este JSON:
 5. **Preferir herramientas locales** sobre enviar datos a la red.
 6. **IDs únicos y descriptivos**: `"leer_readme"`, `"abrir_safari"`, `"enviar_email"`.
 7. **`puede_fallar: true`** cuando el fallo del paso no impide completar el objetivo.
+8. **Rutas absolutas** — para cualquier operación de filesystem usa rutas absolutas del bloque "Rutas del sistema". Nunca uses `~/...` ni rutas relativas. Si la tarea no indica ubicación, parte de `directorio_actual`.

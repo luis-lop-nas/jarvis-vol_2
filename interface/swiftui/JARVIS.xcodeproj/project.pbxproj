@@ -21,6 +21,8 @@
 		A111 /* WindowManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F111 /* WindowManager.swift */; };
 		A112 /* HotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F112 /* HotkeyManager.swift */; };
 		A113 /* AppContextDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = F113 /* AppContextDetector.swift */; };
+		A116 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = F116 /* Theme.swift */; };
+		A117 /* NotchShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = F117 /* NotchShape.swift */; };
 		A114 /* Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = F114 /* Info.plist */; };
 /* End PBXBuildFile section */
 
@@ -39,6 +41,8 @@
 		F111 /* WindowManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowManager.swift; sourceTree = "<group>"; };
 		F112 /* HotkeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyManager.swift; sourceTree = "<group>"; };
 		F113 /* AppContextDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppContextDetector.swift; sourceTree = "<group>"; };
+		F116 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		F117 /* NotchShape.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchShape.swift; sourceTree = "<group>"; };
 		F114 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		FPROD /* JARVIS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = JARVIS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -59,11 +63,22 @@
 			children = (
 				GAPP /* App */,
 				GCORE /* Core */,
+				GDESIGN /* Design */,
 				GVIEWS /* Views */,
 				GUTIL /* Utilities */,
 				GRES /* Resources */,
 				GPROD /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		GDESIGN /* Design */ = {
+			isa = PBXGroup;
+			children = (
+				F116 /* Theme.swift */,
+				F117 /* NotchShape.swift */,
+			);
+			name = Design;
+			path = Sources/Design;
 			sourceTree = "<group>";
 		};
 		GPROD /* Products */ = {
@@ -212,6 +227,8 @@
 				A111 /* WindowManager.swift in Sources */,
 				A112 /* HotkeyManager.swift in Sources */,
 				A113 /* AppContextDetector.swift in Sources */,
+				A116 /* Theme.swift in Sources */,
+				A117 /* NotchShape.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

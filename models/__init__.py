@@ -10,6 +10,7 @@ from models.base import (
 )
 from models.deepseek import DeepSeekModel
 from models.embeddings import CacheEmbeddings, EmbeddingsClient
+from models.gemini import GeminiModel
 from models.kimi import KimiModel
 from models.ollama_client import OllamaModel
 from models.openrouter import OpenRouterModel
@@ -19,6 +20,7 @@ __all__ = [
     "CacheEmbeddings",
     "DeepSeekModel",
     "EmbeddingsClient",
+    "GeminiModel",
     "KimiModel",
     "Mensaje",
     "ModelCapability",

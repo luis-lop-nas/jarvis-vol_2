@@ -41,6 +41,16 @@ class Settings(BaseSettings):
     openrouter_api_key: SecretStr = Field(default=SecretStr(""))
     openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1")
 
+    # --- Gemini (Google) ---
+    gemini_api_key: SecretStr = Field(default=SecretStr(""))
+    gemini_base_url: str = Field(
+        default="https://generativelanguage.googleapis.com/v1beta/openai"
+    )
+    gemini_model_default: str = Field(default="gemini-2.5-flash")
+    # Intervalo mínimo entre llamadas a Gemini (segundos) para no reventar el
+    # rate limit del free tier. 0 = sin throttle.
+    gemini_min_interval_s: float = Field(default=1.0, ge=0.0)
+
     # --- Ollama ---
     ollama_base_url: str = Field(default="http://localhost:11434")
     ollama_model_default: str = Field(default="gemma4:4b")
@@ -118,6 +128,31 @@ class Settings(BaseSettings):
             ruta.mkdir(parents=True, exist_ok=True)
         for archivo in (self.audit_log_path, self.embed_cache_path):
             archivo.parent.mkdir(parents=True, exist_ok=True)
+
+    def rutas_clave(self) -> dict[str, str]:
+        """Rutas absolutas de referencia para anclar planes de filesystem.
+
+        El planner las inyecta en el prompt para que el modelo use rutas reales
+        (p. ej. el proyecto o el escritorio) en vez de inventar ``~/archivo``.
+        Solo incluye las que existen realmente en la máquina.
+
+        Ejemplo::
+            >>> "home" in settings.rutas_clave()
+            True
+        """
+        home = Path.home()
+        candidatas = {
+            "directorio_actual": Path.cwd(),
+            "home": home,
+            "escritorio": home / "Desktop",
+            "descargas": home / "Downloads",
+            "documentos": home / "Documents",
+        }
+        return {
+            nombre: str(ruta)
+            for nombre, ruta in candidatas.items()
+            if ruta.exists()
+        }
 
 
 settings = Settings()

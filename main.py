@@ -31,6 +31,7 @@ from core.agent import Agente
 from core.mcp_bus import MCPBus
 from core.planner import Planner
 from core.reflector import Reflector
+from core.routed_model import RoutedModel
 from core.router import ModelRouter
 from interface.api import crear_servidor
 from interface.websocket import ConnectionManager
@@ -41,15 +42,16 @@ from memory.short_term import MemoriaCortoPlazo
 from models.base import BaseModel as _ModelBase
 from models.base import Mensaje
 from models.deepseek import DeepSeekModel
+from models.gemini import GeminiModel
 from models.kimi import KimiModel
 from models.ollama_client import OllamaModel
 from models.openrouter import OpenRouterModel
-from skills.registry import SkillRegistry
 from security.audit_log import AuditLog
 from security.auth import AuthManager
 from security.confirmation import ConfirmationManager
 from security.permissions import PermissionsManager
 from security.sandbox import Sandbox
+from skills.registry import SkillRegistry
 
 console = Console()
 log = logging.getLogger("jarvis")
@@ -124,15 +126,18 @@ async def _verificar_chroma() -> bool:
 async def _seleccionar_modelo() -> _ModelBase:
     """Devuelve el primer modelo LLM que responde a una petición mínima.
 
-    Orden de preferencia: Kimi (gratis) → DeepSeek → OpenRouter → Ollama local.
-    Si ninguno responde, devuelve ``OllamaModel`` como último recurso para no
-    abortar el arranque (modo degradado: el agente fallará al planificar pero el
-    resto del sistema queda operativo).
+    Orden de preferencia: Gemini Flash → Kimi → DeepSeek → OpenRouter → Ollama.
+    Gemini Flash encabeza la lista por ser un cerebro capaz, barato y disponible
+    (los demás cloud están caídos: Kimi 429/401, DeepSeek 402). Si ninguno
+    responde, devuelve ``OllamaModel`` como último recurso para no abortar el
+    arranque (modo degradado: el agente fallará al planificar pero el resto del
+    sistema queda operativo).
 
     Ejemplo::
         modelo = await _seleccionar_modelo()
     """
     candidatos: list[tuple[str, type[_ModelBase]]] = [
+        ("Gemini", GeminiModel),
         ("Kimi", KimiModel),
         ("DeepSeek", DeepSeekModel),
         ("OpenRouter", OpenRouterModel),
@@ -242,7 +247,11 @@ async def _construir_stack() -> AsyncIterator[
     memoria = MemorySystem()
     mcp_bus: MCPBus = crear_bus_mcp()
     router = ModelRouter()
-    modelo = await _seleccionar_modelo()
+    # Enrutado per-request con fallback en caliente (Goal 4): Planner/Reflector
+    # reciben un RoutedModel que elige modelo por petición y escala la cadena de
+    # fallback ante 429/402/5xx en lugar de fijar un único modelo al arrancar.
+    modelo = RoutedModel(router, audit_log=audit)
+    console.print("[bold green]Router de modelos per-request activo (fallback en caliente).[/]")
 
     agente = Agente(
         planner=Planner(modelo, skill_registry=skill_registry),

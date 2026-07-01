@@ -141,6 +141,7 @@ class Reflector:
         detalle = "\n".join(
             f"- {r.id_paso}: {'OK' if r.exito else 'FALLO'}"
             + (f" — {r.error}" if r.error else "")
+            + (f"\n  salida: {self._render_salida(r.salida)}" if r.exito and r.salida else "")
             for r in resultados
         )
         prompt = (
@@ -148,17 +149,45 @@ class Reflector:
             f"Pasos completados: {exitosos}/{total}\n"
             f"¿Tarea completada? {'Sí' if completada else 'No'}\n\n"
             f"{detalle}\n\n"
-            "Escribe un resumen breve (2-3 frases) en español para el usuario."
+            "Responde al usuario en español (2-3 frases). Si la tarea pedía información "
+            "(leer, buscar, consultar), NO te limites a decir que la hiciste: usa la 'salida' "
+            "de los pasos para dar la respuesta concreta que el usuario pidió."
         )
         respuesta = await self._modelo.complete(
             [
-                Mensaje(rol="system", contenido="Eres el asistente de JARVIS. Resume en español."),
+                Mensaje(
+                    rol="system",
+                    contenido=(
+                        "Eres el asistente de JARVIS. Respondes en español usando el "
+                        "contenido obtenido por las herramientas, no solo el estado de los pasos."
+                    ),
+                ),
                 Mensaje(rol="user", contenido=prompt),
             ],
             temperatura=0.3,
-            max_tokens=256,
+            max_tokens=512,
         )
         return respuesta.content.strip()
+
+    @staticmethod
+    def _render_salida(salida: Any, limite: int = 1500) -> str:
+        """Representación compacta y acotada de la salida de un paso para el prompt.
+
+        Extrae el texto útil de dicts comunes (``contenido``/``content``/``texto``/``data``)
+        y trunca para no disparar el consumo de tokens en salidas grandes.
+
+        Ejemplo::
+            Reflector._render_salida({"contenido": "hola"})
+            'hola'
+        """
+        valor: Any = salida
+        if isinstance(salida, dict):
+            for clave in ("contenido", "content", "texto", "text", "resultado", "data", "salida"):
+                if clave in salida and salida[clave]:
+                    valor = salida[clave]
+                    break
+        texto = str(valor).strip()
+        return texto[:limite] + " […]" if len(texto) > limite else texto
 
     async def explain_failure(
         self,

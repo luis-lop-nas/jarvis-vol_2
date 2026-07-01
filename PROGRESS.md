@@ -22,6 +22,199 @@
 
 ## ✅ Completado recientemente
 
+### Interfaz · Rediseño del notch como Dynamic Island adaptativa (2026-07-01)
+
+El overlay era "cutre" por falta de sistema de diseño (52 `.font(.system)` y 32 `Color(red:)`
+hardcodeados y dispersos, cero tokens). Primer paso del rework de UI: **el notch**, con
+referencias del usuario (boring.notch / NotchNook / Dynamic Island).
+
+- **Investigación:** boring.notch / DynamicNotchKit / Atoll — patrón de NSPanel que cuelga del
+  notch, estados closed/hover/open, `NotchShape` con flare cóncavo superior, animación `.bouncy`.
+- **`Sources/Design/Theme.swift` (nuevo):** sistema de diseño central — paleta (notch negro,
+  superficies, acento cian, colores semánticos por fase), tipografía SF Pro Rounded, escala de
+  espaciado 4pt, animaciones coherentes (`Motion.expand/collapse/content/phase`) y `NotchMetrics`
+  (detección del notch físico vía `auxiliaryTopLeftArea`/`safeAreaInsets`, radios, tamaños).
+- **`Sources/Design/NotchShape.swift` (nuevo):** forma que cuelga del borde con flare CÓNCAVO
+  superior + esquinas inferiores convexas; radios animables.
+- **`NotchView.swift` reescrito:** Dynamic Island adaptativa que **observa el estado** (ya no se
+  reconstruye) con 3 modos que animan dentro del mismo árbol:
+  `closed` (se funde con el notch, no intrusivo) → `live` (contenido partido a los lados del notch:
+  fase+icono a la izquierda, anillo de progreso / modelo a la derecha) → `expanded` (panel colgante
+  con contexto de tarea o confirmación; se abre por hover/tap/confirmación pendiente). Componentes
+  reutilizables `PhaseIndicator`, `ProgressRing`, `ProgressBar`.
+- **[BUG de arquitectura resuelto]** El notch se **recreaba en cada actualización** (`_refreshNotch`
+  reemplazaba el `NSHostingView`) → mataba las animaciones. Ahora `WindowManager.showNotch` crea la
+  ventana **una sola vez** y la vista observa el estado (`@Observable`), animando los cambios.
+  `AppDelegate` simplificado (`NotchView().environment(state)`).
+- **`.pbxproj`:** añadido el grupo `Design` con los 2 ficheros nuevos al target.
+- **Verificado en runtime real:** `xcodebuild BUILD SUCCEEDED`; app lanzada y **capturas reales**
+  (`screencapture`) de 3 estados driveados por un mock WebSocket: live-acting (punto ámbar +
+  `filesystem.leer` + anillo de progreso), expandido-confirmación (cabecera JARVIS + badge modelo +
+  "Confirmar acción sensible" + comando), y sin-conexión. Aspecto limpio y nativo tipo Dynamic Island.
+- **Clic en el notch = expandir/colapsar** (toggle `pinnedExpanded`), NO abre el panel (decisión del
+  usuario). Verificado con clic simulado (Quartz): expande el island sin lanzar el FocusModal. El
+  click-through de la ventana transparente queda confirmado OK (el clic llega al notch, el resto pasa).
+- **Pendiente (siguiente iteración de UI):** integrar botones de confirmación en el panel expandido (hoy remite al modal);
+  aplicar el sistema de diseño al resto de vistas (focus modal, edge log, inline, confirmación,
+  onboarding); pulir balance/espaciado del panel expandido.
+
+### Fase B · Goal 4 — ModelRouter cableado al agente (fallback en caliente) (2026-07-01)
+
+Antes el router existía pero NO se consumía: el agente usaba un único modelo fijado al arrancar.
+Ahora hay enrutado per-request con fallback en caliente.
+
+- **`core/routed_model.py` (nuevo)** — `RoutedModel(BaseModel)`: fachada que Planner/Reflector
+  reciben como un modelo normal. Por dentro: `route()` elige destino por petición; ante fallo
+  transitorio (401/402/403/408/425/429/5xx, timeout, transporte) recorre la `fallback_chain` en
+  caliente; alimenta el circuit breaker (`registrar_fallo/exito_modelo`) y el coste del router.
+  `stream()` hace fallback solo antes del primer chunk (no se puede des-emitir). Errores no
+  transitorios (p.ej. ValueError) se propagan.
+- **`main.py`** — sustituido `modelo = await _seleccionar_modelo()` por `RoutedModel(router)`.
+  (`_seleccionar_modelo` se conserva como sonda/util, ya no en la ruta crítica.)
+- **Verificado e2e:** agente con RoutedModel + router real → tarea "lista el directorio": el log
+  muestra `gemini 429 → kimi 429 → deepseek 402 → openrouter 429 → (local)` escalando solo hasta
+  completar `filesystem.listar` con `[listo]`. Antes un 429 abortaba la tarea; ahora escala.
+- **4 tests** en `test_router.py::TestRoutedModel` (primario OK, fallback en 429, no-transitorio
+  propaga, stream fallback).
+
+### Fase B · Goal 5 — Manejo de rate-limit de Gemini (2026-07-01)
+
+- **`models/_common.py`** — `RetryPolicy` respeta el header `Retry-After` en 429 (segundos o fecha
+  HTTP vía `parsedate_to_datetime`), acotado por `max_retry_after_s=60`. En 5xx sigue con backoff
+  exponencial. Beneficia a todos los clientes OpenAI-compat.
+- **`models/gemini.py`** — throttle suave: `_throttle()` separa las peticiones al menos
+  `gemini_min_interval_s` (nuevo setting, default 1.0s) para no reventar el RPM del free tier.
+  Aplicado en `complete()` y `stream()`, no en cache hits.
+- **3 tests** en `test_models.py` (parse de Retry-After, respeto del Retry-After en 429, throttle
+  espacia llamadas). Suite total tras Fase A+B: **483 verde + 1 skip** (único fallo = flaky Ollama RAM).
+
+### H1 · Goal 3 — Batería de 10 tareas e2e: pipeline validado, límite = disponibilidad de modelo (2026-07-01)
+
+Batería de 10 tareas reales (lectura, listado, búsqueda, sistema, abrir app, escribir con
+confirmación, copiar, clipboard). **La corrida entera cayó a Ollama local** porque Gemini estaba en
+429 (rate limit del free tier agotado por la sesión). Resultado: 5/10 "listo".
+
+- **Pipeline de ejecución confirmado sólido:** `filesystem.listar`, `sistema.abrir_app` y
+  `filesystem.escribir` (con el flujo de confirmación completo) ejecutaron de verdad e2e incluso con
+  el modelo local. Grounding de rutas (Goal 1) y normalización de confirmación (Goal 2) aguantan.
+- **Los fallos NO son bugs del agente:** los `[ERR]` son bucles de `pedir_aclaracion` → el
+  `qwen2.5:3b/0.5b` local no genera JSON válido para el planner y el runaway guard aborta
+  (comportamiento correcto). Con Gemini el mismo tipo de tareas planificaba bien (6/6 en pruebas
+  previas). Calidad de síntesis del 0.5b pobre ("¡¡¡¡…"). Todo esto es capacidad/disponibilidad de
+  modelo, no del pipeline.
+- **Pendiente para cerrar Goal 3 del todo:** re-correr la batería **con Gemini vivo** cuando el
+  cuota del free tier se reponga; requiere Goal 5 (backoff/Retry-After) para no caer al local ante un
+  429 puntual. No se re-martilleó la API en esta sesión a propósito.
+
+### H1 · Goal 2 — Confirmación e2e real + bug de seguridad corregido (2026-07-01)
+
+Ejecutadas de verdad por el pipeline completo: una acción reversible y una con confirmación.
+
+- **Acción reversible (sin confirmación):** "Abre la Calculadora" → `sistema.abrir_app` ejecutado
+  de verdad, app abierta, resumen final correcto. ✅
+- **[BUG DE SEGURIDAD encontrado y RESUELTO]** "Crea jarvis_test.txt en el escritorio" →
+  `filesystem.escribir`. El modelo generó el paso **sin** `requiere_confirmacion=True`;
+  `validate_plan()` lo detectaba **pero solo lo logueaba** → el gate de confirmación del agente NO
+  saltaba y la herramienta llegaba al MCPBus sin confirmar. Lo único que evitó el desastre fue el
+  fail-closed del bus (`PermissionError: requiere confirmación explícita`), que abortaba la tarea.
+  La confirmación dependía de que el modelo acertara un flag. **Fix (defensa en profundidad):**
+  `Planner._normalizar_confirmaciones()` fuerza `requiere_confirmacion=True` en toda herramienta del
+  set de confirmación, aplicado en `plan()` y `replan()`. Ahora el gate es independiente del modelo.
+- **Verificado e2e tras el fix:** `wait_confirmation → resume('si') → execute_tool → done`; el
+  archivo `~/Desktop/jarvis_test.txt` se creó realmente con el contenido correcto (y se limpió).
+- **Nota:** en estas corridas Gemini estaba en 429 y el cerebro cayó a Ollama local; aun así, con el
+  grounding (Goal 1) y la normalización de confirmaciones, el pipeline funcionó. Refuerza la urgencia
+  del Goal 5 (manejo de rate-limit).
+- **Test nuevo:** `test_plan_fuerza_confirmacion_aunque_el_modelo_la_omita`. Suite: 476 verde + 1 skip.
+
+### H1 · Goal 1 — Grounding de rutas en el planner (2026-07-01)
+
+El planner inventaba rutas `~/archivo` (el prompt las enseñaba en los ejemplos) → las tareas de
+filesystem fallaban por ruta inexistente. Resuelto pasándole rutas absolutas reales.
+
+- **`config/settings.py`** — `Settings.rutas_clave() -> dict[str,str]`: devuelve rutas absolutas
+  que existen en la máquina (`directorio_actual`=cwd, `home`, `escritorio`, `descargas`,
+  `documentos`). Filtra las que no existen.
+- **`core/planner.py`** — `Planner._bloque_rutas()` inyecta ese bloque en el prompt de `plan()`
+  con instrucción fuerte: "usa SIEMPRE rutas absolutas de esta lista; NO inventes ~/archivo; si no
+  se indica ubicación, asume directorio_actual".
+- **`config/prompts/planner.md`** — ejemplos `~/...` → rutas absolutas; nueva regla nº8 de rutas.
+- **Verificado con modelo real:** "Lee el README" → `filesystem.leer {'ruta':
+  '/Users/luichi/Documents/Proyectos/JARVIS/jarvis-vol_2/README.md'}` (ruta absoluta correcta a la
+  primera). Nota: en esa corrida Gemini estaba en 429 y cayó a `qwen2.5:1.5b` local, que **aun así**
+  acertó la ruta gracias al grounding.
+- **3 tests nuevos** en `test_core.py` (rutas_clave, inyección en prompt, y el render de salida).
+  Suite: 475 verde + 1 skip (flaky Ollama RAM).
+
+### H1 — Primera ejecución real e2e con Gemini (solo-lectura) (2026-07-01)
+
+Primera tarea ejecutada **de verdad** por el loop completo dirigido por un modelo capaz (nunca
+había ocurrido: antes no había cerebro viable). Tarea: "Lee el README y resume en una frase".
+
+- **Loop completo verificado:** `perceive → plan → execute_tool(filesystem.leer) → reflect
+  (resultado_exito=True) → plan → done` (8 transiciones trazadas). La herramienta se ejecutó vía
+  MCPBus → `ServidorFilesystem` → el archivo **se leyó realmente**, no simulado.
+- **Retry real contra la API:** Gemini devolvió dos `503 Service Unavailable` transitorios y la
+  `RetryPolicy` los reabsorbió sola (`Reintento 1/3`) sin abortar la tarea. El backoff funciona e2e.
+- **[BUG de síntesis final — RESUELTO]** El agente ejecutaba la lectura pero el mensaje final era
+  genérico ("He leído el archivo README.md…"). Causa: `Reflector.generate_summary()` construía el
+  prompt **solo con el estado** de cada paso (`OK`/`FALLO`), nunca con `ResultadoPaso.salida` (el
+  contenido real de la herramienta). Fix: el prompt ahora incluye la salida de cada paso exitoso vía
+  `Reflector._render_salida()` (extrae `contenido/content/texto/data` de dicts y trunca a 1500 chars)
+  + instrucción explícita de responder con ese contenido, no solo reportar estado; `max_tokens`
+  256→512. **Verificado con Gemini real:** "Lee el README y resume" → *"JARVIS es un agente de IA
+  autónomo para macOS, inspirado en el de Iron Man…"*. 2 tests nuevos en `test_core.py`
+  (`test_generate_summary_incluye_salida_en_prompt`, `test_render_salida_extrae_contenido_y_trunca`).
+- **[Diagnóstico — flakiness de planificación era rate-limit, no un bug]** Al repetir el e2e varias
+  veces seguidas, el planner caía en `pedir_aclaracion`/error. Causa real: **Gemini free-tier
+  devuelve 429** tras llamadas rápidas repetidas → el selector cae en cascada a Kimi(429)/DeepSeek
+  (402)/OpenRouter(429)/**Ollama qwen2.5:0.5b**, que no genera JSON válido → fallback Instructor
+  correcto. El parser del planner está bien (cuando Gemini responde, el JSON parsea OK). Lección:
+  no martillear la API free-tier; el fallback en cascada funciona como diseñado. Bug menor aparte:
+  Gemini a veces propone ruta `~/README.md` (grounding de rutas mejorable) — anotado para después.
+- **Suite: 474 verde + 1 skip** (único fallo = flaky ambiental de Ollama por RAM).
+- **Método:** stack mínimo (modelo vía `_seleccionar_modelo` → Gemini, Planner, Reflector, MCPBus
+  rooteado al proyecto) sin levantar el servidor FastAPI; script e2e en scratchpad.
+
+### Soporte de Gemini Flash como modelo swappable (2026-07-01)
+
+Nuevo proveedor cloud integrado siguiendo el contrato `BaseModel`, sin tocar la lógica del agente.
+
+- **`models/gemini.py`** — `GeminiModel(BaseModel)` sobre el endpoint **OpenAI-compat** de Google
+  (`https://generativelanguage.googleapis.com/v1beta/openai`). Mismo patrón que Kimi/DeepSeek:
+  httpx + `RetryPolicy` (429/5xx) + `TTLCache` (5 min) + `log_model_call`. Capacidades
+  `TEXT | VISION | TOOL_USE` (Flash es multimodal). `complete()`, `stream()` SSE y `health_check()`.
+  Tarifas en `TARIFAS_USD` (gemini-2.5-flash 0.30/2.50, flash-lite y 2.0-flash 0.10/0.40 por 1M).
+- **`config/settings.py`** — `gemini_api_key` (SecretStr), `gemini_base_url`, `gemini_model_default`
+  (default `gemini-2.5-flash`). `.env` / `.env.example` con la sección `# --- Gemini (Google) ---`.
+- **`models/__init__.py`** — exporta `GeminiModel`.
+- **`core/router.py`** — `ModeloDestino.GEMINI` de primera clase: `_construir_cliente()` lo instancia
+  y entra en las cadenas de fallback cloud (KIMI→…→GEMINI→OPENROUTER→LOCAL; DEEPSEEK igual;
+  OPENROUTER→GEMINI→LOCAL) con su propia cadena `[DEEPSEEK, OPENROUTER, LOCAL_DEFAULT]`. Las reglas
+  de routing primarias no cambian (Gemini es fallback usable, no rompe semántica existente).
+- **Tests** — `tests/test_models.py`: Gemini en los parametrize de `BaseModel`/async-gen, happy-path,
+  capacidades VISION/TOOL_USE y coste. `tests/test_router.py`: cadena de fallback de Gemini +
+  construcción del cliente. **Suite: 471 verde + 1 skip**; el único fallo (`test_ollama_coste_por_duracion`)
+  es el flaky ambiental por RAM del equipo (guard de Ollama), ajeno a este cambio.
+- **`GEMINI_API_KEY` real configurada y verificada** — `health_check` OK, llamada real e2e
+  (gemini-2.5-flash responde, tokens y coste calculados).
+
+**Gemini ascendido a PRIMARIO (Camino B del H0 resuelto):**
+- **`core/router.py`** — las reglas primarias ahora mandan a Gemini donde antes iban a cloud caídos:
+  visión → `GEMINI` (multimodal), compleja+código → `GEMINI`, razonamiento profundo → `GEMINI`.
+  Default conversacional sigue en DeepSeek. Kimi pasa a ser solo destino de fallback; el fallback de
+  Gemini abre con Kimi (el otro modelo con visión). Tests de router actualizados en consecuencia.
+- **`main.py` `_seleccionar_modelo()`** — Gemini encabeza la sonda de arranque
+  (Gemini → Kimi → DeepSeek → OpenRouter → Ollama). **Este es el cambio que hace que el agente use
+  Gemini de verdad**: el planner/reflector se instancian con el modelo que devuelve esta sonda, y
+  con Kimi (429/401) y DeepSeek (402) caídos, ahora arranca con Gemini.
+- **Verificado e2e:** el selector devuelve `GeminiModel gemini-2.5-flash`; "Abre Spotify y sube
+  volumen 70%" → plan válido de 2 pasos (`sistema.abrir_app` + `sistema.volumen`), 0 errores.
+- **Tanda de pruebas (6 tareas reales por el planner): 6/6 planes válidos.** 5/6 con herramientas
+  reales (incl. multi-paso Safari→github→screenshot con dependencias); la búsqueda web cayó con
+  gracia a `pedir_aclaracion` (fallback Instructor por JSON inválido puntual, no un crash).
+- **Suite: 472 verde + 1 skip**; único fallo el flaky ambiental de Ollama por RAM.
+
 ### H0 (Camino A) — Cerebro local: ChromaDB embebido, sin Docker (2026-07-01)
 
 Objetivo: liberar RAM para que un modelo local capaz sea el cerebro (ver `ROADMAP.md`).

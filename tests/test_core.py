@@ -233,6 +233,64 @@ class TestReflector:
         assert decision == DecisionReflexion.REPLANIFICAR
 
     @pytest.mark.asyncio
+    async def test_generate_summary_incluye_salida_en_prompt(self) -> None:
+        """El resumen final debe pasar la salida real de los pasos al modelo."""
+        modelo = _mock_modelo("JARVIS trata sobre un asistente IA para macOS.")
+        ref = Reflector(modelo)
+        plan = _plan(_paso("p1"), tarea="Lee el README y resume")
+        resultado = ResultadoPaso(
+            id_paso="p1",
+            exito=True,
+            salida={"contenido": "JARVIS es un agente autónomo para macOS en Python."},
+            duracion_ms=10,
+        )
+        texto = await ref.generate_summary(plan, [resultado])
+        assert texto == "JARVIS trata sobre un asistente IA para macOS."
+        # El prompt enviado al modelo debe contener el contenido leído, no solo "OK".
+        prompt_usuario = modelo.complete.call_args.args[0][-1].contenido
+        assert "JARVIS es un agente autónomo para macOS" in prompt_usuario
+
+    @pytest.mark.asyncio
+    async def test_plan_fuerza_confirmacion_aunque_el_modelo_la_omita(self) -> None:
+        """Seguridad: si el modelo omite requiere_confirmacion en una herramienta
+        que la exige, el planner debe forzarla (no depender del modelo)."""
+        respuesta = (
+            '{"objetivo": "crear archivo", "pasos": [{"id": "p1", '
+            '"descripcion": "escribe", "herramienta": "filesystem.escribir", '
+            '"parametros": {"ruta": "/tmp/x.txt", "contenido": "hola"}, '
+            '"requiere_confirmacion": false}]}'
+        )
+        planner = Planner(_mock_modelo(respuesta))
+        plan = await planner.plan("Crea /tmp/x.txt con hola")
+        assert plan.pasos[0].herramienta == "filesystem.escribir"
+        assert plan.pasos[0].requiere_confirmacion is True
+        # Y el plan normalizado ya no produce errores de validación por ese motivo.
+        errores = planner.validate_plan(plan)
+        assert not any("requiere_confirmacion" in e for e in errores)
+
+    @pytest.mark.asyncio
+    async def test_plan_inyecta_rutas_absolutas_en_prompt(self) -> None:
+        """El planner debe pasar rutas absolutas reales al modelo (grounding)."""
+        import os
+
+        modelo = _mock_modelo('{"objetivo": "x", "pasos": []}')
+        planner = Planner(modelo)
+        await planner.plan("Lee el README y dime de qué trata")
+
+        prompt_usuario = modelo.complete.call_args.args[0][-1].contenido
+        assert "Rutas del sistema" in prompt_usuario
+        assert "directorio_actual" in prompt_usuario
+        # El directorio de trabajo real aparece como ruta absoluta.
+        assert os.getcwd() in prompt_usuario
+
+    def test_render_salida_extrae_contenido_y_trunca(self) -> None:
+        assert Reflector._render_salida({"contenido": "hola"}) == "hola"
+        assert Reflector._render_salida("texto plano") == "texto plano"
+        largo = "x" * 3000
+        render = Reflector._render_salida(largo, limite=100)
+        assert render.endswith("[…]") and len(render) < 200
+
+    @pytest.mark.asyncio
     async def test_reflector_continua_si_exito(self) -> None:
         ref = self._reflector()
         paso = _paso("p1")

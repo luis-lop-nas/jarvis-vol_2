@@ -127,17 +127,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func _showInitialState() {
-        WindowManager.shared.showNotch(content:
-            NotchView(
-                status: "Listo",
-                model: "",
-                agentPhase: state.agentPhase,
-                currentToolName: state.currentToolName,
-                errorMessage: state.errorMessage,
-                progressFraction: 0.0
-            )
-            .environment(state)
-        )
+        // Notch persistente: se crea una vez y observa el estado (@Observable).
+        WindowManager.shared.showNotch(content: _makeNotchView())
+    }
+
+    /// Construye el notch observando el estado. El clic solo expande el notch
+    /// (la activación del panel sigue en ⌘⌥Space y el icono de la barra).
+    private func _makeNotchView() -> some View {
+        NotchView().environment(state)
     }
 
     private func _checkOnboarding() {
@@ -183,18 +180,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func _refreshNotch() {
-        WindowManager.shared.showNotch(content:
-            NotchView(
-                status: state.notchStatusText,
-                model: state.notchModel,
-                agentPhase: state.agentPhase,
-                currentToolName: state.currentToolName,
-                errorMessage: state.errorMessage,
-                progressFraction: state.currentProgress,
-                isDisconnected: state.isDisconnected
-            )
-            .environment(state)
-        )
+        // Idempotente: el notch ya observa el estado; esto solo garantiza que la
+        // ventana existe y está al frente. No recrea la vista (mantiene animaciones).
+        WindowManager.shared.showNotch(content: _makeNotchView())
     }
 
     private func _showFocusModal() {
