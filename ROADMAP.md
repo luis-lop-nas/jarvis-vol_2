@@ -32,24 +32,31 @@ sin caer en `pedir_aclaracion` / runaway guard. **Verificado con log real.**
 
 ---
 
-## Hito 1 — Ejecución real fiable  ⏱️ 2–4 días
+## Hito 1 — Ejecución real fiable  🟡 muy avanzado (2026-07-01)  ⏱️ 1–2 días restantes
 
-Las acciones tienen tests con mocks pero **nunca se ejecutaron dirigidas por un modelo**.
-Aquí saldrán los bugs del mundo real.
+Las acciones tenían tests con mocks pero **nunca se ejecutaron dirigidas por un modelo**. Se pasó
+una batería e2e real (stack + Gemini) que destapó 7 bugs, todos corregidos. Detalle en `PROGRESS.md`.
 
-- ⬜ Batería de 10 tareas reales end-to-end, p.ej.:
-  - abrir/cerrar apps, subir volumen, bloquear pantalla (`system`)
-  - leer/buscar/mover archivos (`filesystem`)
-  - ejecutar comando de terminal seguro (`terminal`)
-  - abrir URL y extraer texto (`browser`)
-  - enviar un iMessage/mail (`comms`, con confirmación)
-  - "resume este PDF/archivo" (percepción + memoria)
-- ⬜ Arreglar lo que rompa en ejecución real (paths, permisos macOS, timeouts, parsing).
-- 🟡 Verificar el **flujo de confirmación completo** en real (overlay P6 ↔ backend resolve).
+- 🟡 Batería de tareas reales end-to-end — **7/7 familias probadas verifican OK**:
+  - ✅ abrir apps, subir volumen (`system`)
+  - ✅ leer/buscar/escribir archivos (`filesystem`, escritura con confirmación)
+  - ✅ ejecutar comando de terminal + Python seguro (`terminal`, con confirmación)
+  - ✅ abrir URL, extraer texto y ejecutar JS (`browser`, página persistente)
+  - ⬜ enviar un iMessage/mail (`comms`, con confirmación) — aún sin e2e
+  - ⬜ "resume este PDF/archivo" (percepción + memoria) — aún sin e2e
+  - ⬜ cerrar apps, bloquear pantalla — aún sin e2e
+- ✅ Arreglar lo que rompa en ejecución real — 7 bugs corregidos (permission_manager sin instanciar,
+  evaluate_task_completion prematura, **confirmación MCP fail-closed**, browser no registrado en el
+  bus, lazy-start Playwright, Safari sin ventana, página persistente para js/click/fill).
+- 🟡 Flujo de confirmación: **verificado a nivel backend** (agente `WAIT_CONFIRMATION` ↔ `resume`,
+  ligado a sesión). Falta el round-trip real por el **overlay P6** (tarjeta de confirmación en UI).
 - ⬜ Verificar escritura física en el modal (el auto-foco ya se ve; falta confirmación manual).
-- ⬜ Manejo de fallos reales: replanning y reflector con errores de verdad, no simulados.
+- 🟡 Manejo de fallos reales: replanning/reflector ejercitados (runaway guard, replan). Pendiente:
+  que un fallo determinista no consuma 3 repeticiones hasta el guard (abortar antes con el error real).
 
 **Criterio de hecho:** 10/10 tareas comunes se completan e2e o fallan de forma limpia y explicada.
+**Estado:** familias core (system/filesystem/terminal/browser) ✅; faltan comms, percepción y el
+round-trip de confirmación por overlay.
 
 ---
 
@@ -118,7 +125,7 @@ La maquinaria existe (ChromaDB + episódica + procedural + vault). Falta que se 
 | Hito | Impacto | Esfuerzo | Depende de |
 |------|---------|----------|-----------|
 | 0 · Cerebro | ✅ HECHO | — | — |
-| 1 · Ejecución real | 🔴 alto | 2–4 d | H0 |
+| 1 · Ejecución real | 🟡 muy avanzado | 1–2 d | H0 ✅ |
 | 2 · Voz | 🟠 alto (tu objetivo) | 3–5 d | H0 |
 | 3 · Percepción | 🟠 medio | 2–3 d | H0 |
 | 4 · Memoria | 🟡 medio | 2–3 d | H1 |

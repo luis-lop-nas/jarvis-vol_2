@@ -22,6 +22,38 @@
 
 ## ✅ Completado recientemente
 
+### H0 cerebro + H1 ejecución real (verificación exhaustiva) (2026-07-01)
+
+**H0 — cerebro encendido.** Modelo capaz respondiendo: **Gemini 2.5 Flash** (crédito de pago;
+DeepSeek recargado pero el top-up tarda 1–3 días; OpenRouter con slugs `:free` caducados → 404).
+Demostrado e2e: `agente.run("lista los archivos del escritorio")` → `plan → execute_tool → done`.
+
+**H1 — ejecución real.** Batería e2e real (stack completo + Gemini) verificada **7/7 familias**:
+`filesystem.listar/leer/buscar/escribir`, `terminal.ejecutar/python`, `sistema.abrir_app/volumen`,
+`browser.abrir/leer/ejecutar_js`. Escritura y navegación **con confirmación** incluidas. Suite
+unitaria **486 passed / 0 failed**.
+
+**7 bugs destapados por las pruebas y corregidos:**
+1. `main.py`: `security.permission_manager` (políticas por herramienta) nunca se instanciaba →
+   skills sin política y defensa de inyección inactiva. Cableado + pasado al Agente.
+2. `reflector.evaluate_task_completion`: un plan solo de pasos `puede_fallar` se daba por completo
+   antes de ejecutar (`all([]) == True`) → se saltaba la tarea. + test de regresión.
+3. **`crear_bus_mcp()` sin `callback_confirmacion`** → toda herramienta confirmable a nivel MCP
+   (terminal.python, filesystem escritura/borrado/mover, mail, browser js) fallaba fail-closed en
+   producción. Cableado con **gate único en el agente** (`_confirmacion_via_agente`).
+4. `ServidorNavegador` **no estaba registrado** en el bus → familia browser muerta. Registrado + callback.
+5. `Navegador` sin lazy-start → `asegurar_iniciado()`.
+6. `ControlSafari.abrir_url` fallaba sin ventana de Safari → activa + crea documento.
+7. Navegación interactiva (`ejecutar_js`/`click`/`fill`): sin página persistente → `NoneType`.
+   Página persistente que `abrir` deja viva y los interactivos usan por defecto.
+
+**Optimización de conexión (commit previo):** persistencia de sesión fuera del streaming, sin
+round-trip a `/models` en la 1ª petición OpenRouter, TTLCache de OpenRouter activada, parseo orjson.
+
+**Pendiente de H1:** comms (mail/iMessage) y percepción ("resume este PDF") aún sin e2e; el flujo
+de confirmación está verificado a nivel backend (agente `WAIT_CONFIRMATION` ↔ `resume`), falta el
+round-trip real por el overlay P6.
+
 ### Interfaz · Rediseño del notch como Dynamic Island adaptativa (2026-07-01)
 
 El overlay era "cutre" por falta de sistema de diseño (52 `.font(.system)` y 32 `Color(red:)`
@@ -51,9 +83,14 @@ referencias del usuario (boring.notch / NotchNook / Dynamic Island).
   (`screencapture`) de 3 estados driveados por un mock WebSocket: live-acting (punto ámbar +
   `filesystem.leer` + anillo de progreso), expandido-confirmación (cabecera JARVIS + badge modelo +
   "Confirmar acción sensible" + comando), y sin-conexión. Aspecto limpio y nativo tipo Dynamic Island.
-- **Clic en el notch = expandir/colapsar** (toggle `pinnedExpanded`), NO abre el panel (decisión del
-  usuario). Verificado con clic simulado (Quartz): expande el island sin lanzar el FocusModal. El
-  click-through de la ventana transparente queda confirmado OK (el clic llega al notch, el resto pasa).
+- **Jerarquía de interacción del notch (4 modos):** `closed` (reposo, pill mínima que abraza el
+  notch, no intrusiva) → `peek` (HOVER: crece un poco y revela `● JARVIS` + chevron ⌄) → `live`
+  (tarea en curso) → `expanded` (CLIC: panel completo, "¿En qué puedo ayudarte?"). El hover ya no
+  salta a expandido; el clic hace toggle expand/colapsar y NO abre el FocusModal.
+- **[BUG resuelto] Idle mostraba "Pensando…":** `agentPhase` por defecto es `.thinking`. `isActive`
+  ahora trata `uiState == .silent` como reposo → el notch se cierra de verdad cuando no hay tarea.
+- Verificado con Quartz (hover + clic simulados) + `screencapture`: los 4 estados renderizan bien;
+  click-through de la ventana transparente confirmado OK.
 - **Pendiente (siguiente iteración de UI):** integrar botones de confirmación en el panel expandido (hoy remite al modal);
   aplicar el sistema de diseño al resto de vistas (focus modal, edge log, inline, confirmación,
   onboarding); pulir balance/espaciado del panel expandido.
