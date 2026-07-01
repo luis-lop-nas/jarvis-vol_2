@@ -23,10 +23,13 @@ struct NotchView: View {
     private var disconnected: Bool { state.isDisconnected }
     private var accent: Color { Theme.phaseColor(phase, disconnected: disconnected) }
 
-    /// El agente está "vivo" (trabajando o en un estado que merece señal).
+    /// El agente está "vivo" (trabajando o en un estado que merece señal). En
+    /// reposo (uiState == .silent) el notch se cierra aunque la fase por defecto
+    /// sea .thinking — evita mostrar "Pensando…" cuando no hay tarea en curso.
     private var isActive: Bool {
-        disconnected || phase == .thinking || phase == .acting || phase == .error
-            || state.pendingConfirmation != nil
+        if disconnected || state.pendingConfirmation != nil { return true }
+        if case .silent = state.uiState { return false }
+        return phase == .thinking || phase == .acting || phase == .error
     }
 
     private var mode: NotchMode {
@@ -50,7 +53,7 @@ struct NotchView: View {
     private var islandWidth: CGFloat {
         switch mode {
         case .closed:   return gap > 0 ? gap + 8 : 180
-        case .peek:     return gap + 128
+        case .peek:     return gap + 176
         case .live:     return gap + 260
         case .expanded: return 440
         }
@@ -96,9 +99,36 @@ struct NotchView: View {
     @ViewBuilder private var island: some View {
         switch mode {
         case .closed:   closedContent
+        case .peek:     peekContent
         case .live:     liveContent
         case .expanded: expandedContent
         }
+    }
+
+    // — Peek: al pasar el ratón, crece un poco y revela la identidad "JARVIS".
+    private var peekContent: some View {
+        HStack(spacing: 0) {
+            HStack(spacing: Theme.Space.sm) {
+                PhaseIndicator(phase: phase, disconnected: disconnected, color: accent)
+                Text("JARVIS")
+                    .font(Theme.Font.caption(.semibold))
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            .padding(.leading, Theme.Space.lg)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Spacer().frame(width: gap)
+
+            Image(systemName: "chevron.down")
+                .font(Theme.Font.micro())
+                .foregroundStyle(Theme.Palette.textTertiary)
+                .padding(.trailing, Theme.Space.lg)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .padding(.top, 1)
+        .transition(.opacity)
     }
 
     // — Closed: prácticamente invisible; solo un punto de acento si está conectado.
