@@ -243,6 +243,31 @@ async def test_confirm_404_cuando_resume_falla(manager):
     assert r.status_code == 404
 
 
+async def test_confirm_usa_action_id_para_resolver_confirmacion(manager):
+    """El overlay solo envía `action_id`; debe servir como confirmation_id.
+
+    Regresión: antes solo se resolvía la confirmación MCP si venía `request_id`,
+    así que la confirmación del overlay (que manda `action_id`) nunca llegaba al
+    ConfirmationManager y la acción quedaba colgada fail-closed.
+    """
+    from unittest.mock import MagicMock
+
+    cm = MagicMock()
+    agente = make_agente()
+    app2 = crear_servidor(agente, manager, confirmation_manager=cm)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app2),
+        base_url="http://test",
+        headers={"X-JARVIS-Token": get_api_token()},
+    ) as c:
+        await c.post("/chat", json={"message": "borrar", "session_id": "conf-aid"})
+        r = await c.post(
+            "/confirm/conf-aid", json={"action_id": "conf-123", "confirmed": True}
+        )
+    assert r.status_code == 200
+    cm.resolve.assert_called_once_with("conf-123", True, "conf-aid")
+
+
 # ---------------------------------------------------------------------------
 # POST /cancel/{session_id}
 # ---------------------------------------------------------------------------

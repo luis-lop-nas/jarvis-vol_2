@@ -320,16 +320,18 @@ def crear_servidor(
         if not _check_rate(session_id):
             raise HTTPException(status_code=429, detail="Rate limit excedido")
 
-        # Desbloquea confirmaciones de seguridad si hay un request_id
-        if confirmation_manager is not None and req.request_id:
+        # Desbloquea confirmaciones de seguridad. El overlay usa `action_id`;
+        # `request_id` es un alias histórico. Ambos portan el confirmation_id.
+        conf_id = req.request_id or req.action_id
+        if confirmation_manager is not None and conf_id:
             try:
-                confirmation_manager.resolve(req.request_id, req.confirmed, session_id)
+                confirmation_manager.resolve(conf_id, req.confirmed, session_id)
             except SecurityError:
                 raise HTTPException(status_code=403, detail="Violación de seguridad: sesión incorrecta") from None
 
         respuesta = "si" if req.confirmed else "no"
         ok = await agente.resume(session_id, respuesta)
-        if not ok and (confirmation_manager is None or not req.request_id):
+        if not ok and (confirmation_manager is None or not conf_id):
             raise HTTPException(status_code=404, detail="Sesión no activa o no esperando")
         return {"status": "ok"}
 
@@ -662,7 +664,10 @@ def crear_servidor(
 
                 elif tipo == "confirm":
                     confirmed = bool(payload.get("confirmed", False))
-                    req_id = payload.get("request_id")
+                    # El overlay envía la clave `action_id`; el `request_id` es un
+                    # alias histórico. Para la confirmación MCP ambos portan el
+                    # confirmation_id real, así que aceptamos cualquiera de las dos.
+                    req_id = payload.get("request_id") or payload.get("action_id")
                     if confirmation_manager is not None and req_id:
                         try:
                             # Siempre usar el session_id de la conexión (URL param),

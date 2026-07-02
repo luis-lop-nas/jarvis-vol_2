@@ -259,6 +259,13 @@ final class JARVISState {
                     affectedItems: affectedItems,
                     affectedCount: affectedCount
                 )
+                // Auto-surface el panel con la ConfirmationCard (botones Confirmar/
+                // Cancelar). Sin poner uiState en .focusModal, _syncWindowsToState no
+                // abre la ventana y el notch solo muestra "Abre el panel para
+                // confirmar" — dejando el round-trip a merced de un hotkey manual.
+                if case .focusModal = uiState {} else {
+                    uiState = .focusModal(query: "", response: "", steps: logSteps)
+                }
                 focusModalShown = true
 
             case "inline", "sugerencia":
