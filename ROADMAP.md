@@ -3,9 +3,9 @@
 > Objetivo: un asistente tipo Claude Code / OpenClaw que **actúe en el Mac** de Luichi —
 > ejecuta tareas, ve la pantalla, recuerda contexto y (opcional) habla.
 >
-> Estado base (2026-07-01): infraestructura ~85% hecha (467 tests, 10 fases), overlay P1–P8
-> verificado. **Bloqueante: no hay un LLM capaz respondiendo** → el agente no ejecuta tareas.
-> Detalle en `PROGRESS.md`. Esta ruta ordena lo que falta por impacto.
+> Estado base (2026-07-02): infraestructura ~85% hecha (487 tests, 10 fases), overlay P1–P8
+> verificado. **H0 ✅ (cerebro con fallback) y H1 ✅ funcional escrito**: el agente ejecuta tareas
+> escribiéndole, con confirmación e2e por overlay. Detalle en `PROGRESS.md`. Esta ruta ordena lo que falta.
 
 Leyenda: ✅ hecho · 🟡 parcial/existe sin validar · ⬜ por hacer
 
@@ -32,31 +32,40 @@ sin caer en `pedir_aclaracion` / runaway guard. **Verificado con log real.**
 
 ---
 
-## Hito 1 — Ejecución real fiable  🟡 muy avanzado (2026-07-01)  ⏱️ 1–2 días restantes
+## Hito 1 — Ejecución real fiable  ✅ funcional escrito (2026-07-02)  ⏱️ colas finas (visión/lock)
 
 Las acciones tenían tests con mocks pero **nunca se ejecutaron dirigidas por un modelo**. Se pasó
-una batería e2e real (stack + Gemini) que destapó 7 bugs, todos corregidos. Detalle en `PROGRESS.md`.
+una batería e2e real (stack + Gemini) que destapó 7 bugs, todos corregidos. En 2026-07-02 se cerraron
+los dos bloqueantes de usabilidad (**fallback de modelo** y **confirmación por overlay**) y se
+verificaron las familias restantes (comms, "resume archivo", cerrar app). Detalle en `PROGRESS.md`.
 
-- 🟡 Batería de tareas reales end-to-end — **7/7 familias probadas verifican OK**:
-  - ✅ abrir apps, subir volumen (`system`)
+- ✅ Batería de tareas reales end-to-end — **familias verificadas OK**:
+  - ✅ abrir/cerrar apps, subir volumen (`system` — `cerrar_app` verificado 2026-07-02)
   - ✅ leer/buscar/escribir archivos (`filesystem`, escritura con confirmación)
   - ✅ ejecutar comando de terminal + Python seguro (`terminal`, con confirmación)
   - ✅ abrir URL, extraer texto y ejecutar JS (`browser`, página persistente)
-  - ⬜ enviar un iMessage/mail (`comms`, con confirmación) — aún sin e2e
-  - ⬜ "resume este PDF/archivo" (percepción + memoria) — aún sin e2e
-  - ⬜ cerrar apps, bloquear pantalla — aún sin e2e
+  - ✅ enviar un mail (`comms`, con confirmación) — e2e 2026-07-02 (envío real a la propia dirección)
+  - ✅ "resume este archivo" (`filesystem.leer` + modelo) — e2e 2026-07-02
+  - 🟡 `percepcion.screenshot`: llega a `execute_tool` pero el handler devuelve solo `{"bytes":N}`
+    (no la imagen) → el modelo reintira hasta el runaway guard. **Trabajo de H3 (visión).**
+  - ⬜ bloquear pantalla — **no existe tool de bloqueo**; el modelo alucina éxito con `abrir_app`.
 - ✅ Arreglar lo que rompa en ejecución real — 7 bugs corregidos (permission_manager sin instanciar,
   evaluate_task_completion prematura, **confirmación MCP fail-closed**, browser no registrado en el
   bus, lazy-start Playwright, Safari sin ventana, página persistente para js/click/fill).
-- 🟡 Flujo de confirmación: **verificado a nivel backend** (agente `WAIT_CONFIRMATION` ↔ `resume`,
-  ligado a sesión). Falta el round-trip real por el **overlay P6** (tarjeta de confirmación en UI).
-- ⬜ Verificar escritura física en el modal (el auto-foco ya se ve; falta confirmación manual).
+- ✅ **Fallback de modelo real** (2026-07-02): `openrouter.complete()` rota en 404 (slug caducado),
+  no solo 429/502/503; slugs `:free` reescritos con los vivos del catálogo. Verificado en vivo: con
+  Gemini caído la petición responde por OpenRouter free.
+- ✅ **Round-trip de confirmación por overlay P6** (2026-07-02): backend acepta `action_id` del overlay
+  como confirmation_id; la rama `waiting` auto-abre el panel con la `ConfirmationCard`. Verificado e2e
+  por WebSocket real: **aprobar** → escribe → `done`; **rechazar** → `error` limpio sin tocar disco.
 - 🟡 Manejo de fallos reales: replanning/reflector ejercitados (runaway guard, replan). Pendiente:
-  que un fallo determinista no consuma 3 repeticiones hasta el guard (abortar antes con el error real).
+  que un fallo determinista (p.ej. screenshot sin contenido útil) no consuma 3 repeticiones hasta el
+  guard (abortar antes con el error real).
 
 **Criterio de hecho:** 10/10 tareas comunes se completan e2e o fallan de forma limpia y explicada.
-**Estado:** familias core (system/filesystem/terminal/browser) ✅; faltan comms, percepción y el
-round-trip de confirmación por overlay.
+**Estado:** **funcional para uso escrito diario** — cerebro con fallback, confirmación e2e por overlay,
+y familias system/filesystem/terminal/browser/comms + "resume archivo" ✅. Pendiente fino: visión (H3)
+y tool de bloqueo de pantalla.
 
 ---
 
@@ -125,7 +134,7 @@ La maquinaria existe (ChromaDB + episódica + procedural + vault). Falta que se 
 | Hito | Impacto | Esfuerzo | Depende de |
 |------|---------|----------|-----------|
 | 0 · Cerebro | ✅ HECHO | — | — |
-| 1 · Ejecución real | 🟡 muy avanzado | 1–2 d | H0 ✅ |
+| 1 · Ejecución real | ✅ funcional escrito | colas finas | H0 ✅ |
 | 2 · Voz | 🟠 alto (tu objetivo) | 3–5 d | H0 |
 | 3 · Percepción | 🟠 medio | 2–3 d | H0 |
 | 4 · Memoria | 🟡 medio | 2–3 d | H1 |

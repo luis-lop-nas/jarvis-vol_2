@@ -22,6 +22,38 @@
 
 ## ✅ Completado recientemente
 
+### Funcional para uso escrito: fallback de modelo + confirmación por overlay + familias restantes (2026-07-02)
+
+Objetivo de la sesión: dejar JARVIS **usable escribiéndole**. Tres bloques, cada uno con log real.
+
+**Bloque 1 — Fallback de modelo real.** `openrouter.complete()` ahora rota al siguiente `:free`
+también en **404** (slug caducado), no solo en 429/502/503 — un `:free` muerto ya no tumba la
+petición. `MODELOS_FREE_PREFERIDOS` reescrito con slugs **verificados vivos** contra el catálogo
+(kimi-k2/deepseek-chat-v3/qwen3 `:free` ya no existían → causa raíz del 404).
+*Verificado en vivo:* con Gemini/Kimi/DeepSeek forzados a fallar, la petición cae a OpenRouter,
+rota los saturados (429) y responde por `gpt-oss-120b:free`. Tests: `test_openrouter_rota_en_404_slug_caducado`.
+
+**Bloque 2 — Round-trip de confirmación por overlay (P6).** Dos arreglos:
+- Backend acepta `action_id` (lo que envía el overlay) como confirmation_id en `/confirm` y en el
+  WS, no solo `request_id`. Antes la confirmación del overlay nunca llegaba al `ConfirmationManager`.
+- Overlay: la rama `waiting` del gate del agente pone `uiState=.focusModal` para auto-abrir el panel
+  con la `ConfirmationCard` (botones), como ya hacía `applyConfirmation`.
+*Verificado e2e por WebSocket real* (esquema exacto del overlay): **APROBAR** → escribe → `done` con
+el archivo escrito; **RECHAZAR** → `error` limpio "Paso rechazado" sin tocar disco.
+
+**Bloque 3 — Familias restantes de H1 e2e** (stack real + modelo):
+- ✅ `sistema.cerrar_app` → `execute_tool` → `listo`.
+- ✅ `mail.enviar` (comms) → `wait_confirmation` → auto-confirm → `execute_tool` → `listo` (envío real
+  a la propia dirección del usuario como objetivo seguro).
+- ✅ "resume este archivo" → `filesystem.leer` → `listo` con resumen correcto.
+- ⚠️ `percepcion.screenshot` llega a `execute_tool` pero el handler devuelve solo `{"bytes": N}` (no
+  la imagen) → el modelo no "ve" nada y reintenta hasta el runaway guard. Es trabajo de **H3 (visión)**,
+  no bloquea el uso escrito.
+- ⚠️ "bloquear pantalla": **no existe tool de bloqueo**; el modelo improvisó con `sistema.abrir_app` y
+  afirmó éxito (alucinación). Pendiente: añadir tool real o rechazar la intención.
+
+Suite unitaria: **487 passed / 1 skipped**.
+
 ### H0 cerebro + H1 ejecución real (verificación exhaustiva) (2026-07-01)
 
 **H0 — cerebro encendido.** Modelo capaz respondiendo: **Gemini 2.5 Flash** (crédito de pago;
